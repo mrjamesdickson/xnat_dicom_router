@@ -1,0 +1,27 @@
+# Gradle
+.gradle/
+build/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+
+# Data and logs
+data/
+logs/
+*.log
+
+# Config with secrets
+config/*.yaml
+!config/router-config.example.yaml
+
+# Node modules
+ui/node_modules/
+node_modules/
+
+# Test DICOM data
+test-data/
