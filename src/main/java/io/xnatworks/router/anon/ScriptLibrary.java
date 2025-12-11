@@ -419,140 +419,132 @@ public class ScriptLibrary {
     // Built-in script templates
 
     private String getHipaaStandardScript() {
-        return """
-                // HIPAA Safe Harbor De-identification Script
-                // Removes 18 HIPAA identifiers as defined in 45 CFR 164.514(b)(2)
-
-                version "6.3"
-
-                // Patient identifiers
-                (0010,0010) := "ANONYMOUS"           // Patient Name
-                (0010,0020) := hashUID[(0010,0020)]  // Patient ID
-                (0010,0030) := ""                    // Patient Birth Date
-                (0010,0032) := ""                    // Patient Birth Time
-                (0010,0050) := ""                    // Patient Insurance Plan Code
-                (0010,1000) := ""                    // Other Patient IDs
-                (0010,1001) := ""                    // Other Patient Names
-                (0010,1005) := ""                    // Patient Birth Name
-                (0010,1010) := ""                    // Patient Age
-                (0010,1020) := ""                    // Patient Size
-                (0010,1030) := ""                    // Patient Weight
-                (0010,1040) := ""                    // Patient Address
-                (0010,1060) := ""                    // Patient Mother Birth Name
-                (0010,2154) := ""                    // Patient Telephone Numbers
-                (0010,2160) := ""                    // Ethnic Group
-                (0010,21B0) := ""                    // Additional Patient History
-                (0010,21F0) := ""                    // Patient Religious Preference
-                (0010,4000) := ""                    // Patient Comments
-
-                // Study identifiers
-                (0008,0020) := ""                    // Study Date
-                (0008,0021) := ""                    // Series Date
-                (0008,0022) := ""                    // Acquisition Date
-                (0008,0023) := ""                    // Content Date
-                (0008,0030) := ""                    // Study Time
-                (0008,0031) := ""                    // Series Time
-                (0008,0032) := ""                    // Acquisition Time
-                (0008,0033) := ""                    // Content Time
-                (0008,0050) := ""                    // Accession Number
-                (0008,0080) := ""                    // Institution Name
-                (0008,0081) := ""                    // Institution Address
-                (0008,0090) := ""                    // Referring Physician Name
-                (0008,0092) := ""                    // Referring Physician Address
-                (0008,0094) := ""                    // Referring Physician Tel Numbers
-                (0008,1010) := ""                    // Station Name
-                (0008,1040) := ""                    // Institutional Department Name
-                (0008,1048) := ""                    // Physician(s) of Record
-                (0008,1050) := ""                    // Performing Physician Name
-                (0008,1060) := ""                    // Name of Physician Reading Study
-                (0008,1070) := ""                    // Operators Name
-
-                // UIDs - replace with new values
-                (0020,000D) := hashUID[(0020,000D)] // Study Instance UID
-                (0020,000E) := hashUID[(0020,000E)] // Series Instance UID
-                (0008,0018) := hashUID[(0008,0018)] // SOP Instance UID
-                (0008,0016) keep                     // SOP Class UID (keep for compatibility)
-
-                // De-identification marker
-                (0012,0062) := "YES"                 // Patient Identity Removed
-                (0012,0063) := "HIPAA Safe Harbor"  // De-identification Method
-                """;
+        return "// HIPAA Safe Harbor De-identification Script\n" +
+                "// Removes 18 HIPAA identifiers as defined in 45 CFR 164.514(b)(2)\n" +
+                "\n" +
+                "version \"6.3\"\n" +
+                "\n" +
+                "// Patient identifiers\n" +
+                "(0010,0010) := \"ANONYMOUS\"           // Patient Name\n" +
+                "(0010,0020) := hashUID[(0010,0020)]  // Patient ID\n" +
+                "(0010,0030) := \"\"                    // Patient Birth Date\n" +
+                "(0010,0032) := \"\"                    // Patient Birth Time\n" +
+                "(0010,0050) := \"\"                    // Patient Insurance Plan Code\n" +
+                "(0010,1000) := \"\"                    // Other Patient IDs\n" +
+                "(0010,1001) := \"\"                    // Other Patient Names\n" +
+                "(0010,1005) := \"\"                    // Patient Birth Name\n" +
+                "(0010,1010) := \"\"                    // Patient Age\n" +
+                "(0010,1020) := \"\"                    // Patient Size\n" +
+                "(0010,1030) := \"\"                    // Patient Weight\n" +
+                "(0010,1040) := \"\"                    // Patient Address\n" +
+                "(0010,1060) := \"\"                    // Patient Mother Birth Name\n" +
+                "(0010,2154) := \"\"                    // Patient Telephone Numbers\n" +
+                "(0010,2160) := \"\"                    // Ethnic Group\n" +
+                "(0010,21B0) := \"\"                    // Additional Patient History\n" +
+                "(0010,21F0) := \"\"                    // Patient Religious Preference\n" +
+                "(0010,4000) := \"\"                    // Patient Comments\n" +
+                "\n" +
+                "// Study identifiers\n" +
+                "(0008,0020) := \"\"                    // Study Date\n" +
+                "(0008,0021) := \"\"                    // Series Date\n" +
+                "(0008,0022) := \"\"                    // Acquisition Date\n" +
+                "(0008,0023) := \"\"                    // Content Date\n" +
+                "(0008,0030) := \"\"                    // Study Time\n" +
+                "(0008,0031) := \"\"                    // Series Time\n" +
+                "(0008,0032) := \"\"                    // Acquisition Time\n" +
+                "(0008,0033) := \"\"                    // Content Time\n" +
+                "(0008,0050) := \"\"                    // Accession Number\n" +
+                "(0008,0080) := \"\"                    // Institution Name\n" +
+                "(0008,0081) := \"\"                    // Institution Address\n" +
+                "(0008,0090) := \"\"                    // Referring Physician Name\n" +
+                "(0008,0092) := \"\"                    // Referring Physician Address\n" +
+                "(0008,0094) := \"\"                    // Referring Physician Tel Numbers\n" +
+                "(0008,1010) := \"\"                    // Station Name\n" +
+                "(0008,1040) := \"\"                    // Institutional Department Name\n" +
+                "(0008,1048) := \"\"                    // Physician(s) of Record\n" +
+                "(0008,1050) := \"\"                    // Performing Physician Name\n" +
+                "(0008,1060) := \"\"                    // Name of Physician Reading Study\n" +
+                "(0008,1070) := \"\"                    // Operators Name\n" +
+                "\n" +
+                "// UIDs - replace with new values\n" +
+                "(0020,000D) := hashUID[(0020,000D)] // Study Instance UID\n" +
+                "(0020,000E) := hashUID[(0020,000E)] // Series Instance UID\n" +
+                "(0008,0018) := hashUID[(0008,0018)] // SOP Instance UID\n" +
+                "(0008,0016) keep                     // SOP Class UID (keep for compatibility)\n" +
+                "\n" +
+                "// De-identification marker\n" +
+                "(0012,0062) := \"YES\"                 // Patient Identity Removed\n" +
+                "(0012,0063) := \"HIPAA Safe Harbor\"  // De-identification Method\n";
     }
 
     private String getMinimalScript() {
-        return """
-                // Minimal Anonymization Script
-                // Removes only the most basic patient identifiers
-                // Preserves dates and most metadata
-
-                version "6.3"
-
-                // Patient identifiers only
-                (0010,0010) := "ANONYMOUS"           // Patient Name
-                (0010,0020) := hashUID[(0010,0020)]  // Patient ID
-
-                // De-identification marker
-                (0012,0062) := "YES"                 // Patient Identity Removed
-                (0012,0063) := "Minimal"            // De-identification Method
-                """;
+        return "// Minimal Anonymization Script\n" +
+                "// Removes only the most basic patient identifiers\n" +
+                "// Preserves dates and most metadata\n" +
+                "\n" +
+                "version \"6.3\"\n" +
+                "\n" +
+                "// Patient identifiers only\n" +
+                "(0010,0010) := \"ANONYMOUS\"           // Patient Name\n" +
+                "(0010,0020) := hashUID[(0010,0020)]  // Patient ID\n" +
+                "\n" +
+                "// De-identification marker\n" +
+                "(0012,0062) := \"YES\"                 // Patient Identity Removed\n" +
+                "(0012,0063) := \"Minimal\"            // De-identification Method\n";
     }
 
     private String getResearchSafeScript() {
-        return """
-                // Research-Safe Anonymization Script
-                // Removes identifiers while preserving clinically relevant data
-                // Keeps dates offset, preserves age/sex/modality
-
-                version "6.3"
-
-                // Patient identifiers
-                (0010,0010) := "RESEARCH_SUBJECT"    // Patient Name
-                (0010,0020) := hashUID[(0010,0020)]  // Patient ID
-                (0010,1000) := ""                    // Other Patient IDs
-                (0010,1001) := ""                    // Other Patient Names
-                (0010,1040) := ""                    // Patient Address
-                (0010,2154) := ""                    // Patient Telephone Numbers
-
-                // Preserve but keep: Age, Sex, Weight, Height (clinically relevant)
-                (0010,0040) keep                     // Patient Sex
-                (0010,1010) keep                     // Patient Age
-                (0010,1020) keep                     // Patient Size
-                (0010,1030) keep                     // Patient Weight
-
-                // Institution info
-                (0008,0080) := "RESEARCH_SITE"       // Institution Name
-                (0008,0081) := ""                    // Institution Address
-                (0008,0090) := ""                    // Referring Physician Name
-                (0008,1050) := ""                    // Performing Physician Name
-                (0008,1070) := ""                    // Operators Name
-
-                // Keep dates (important for longitudinal studies)
-                (0008,0020) keep                     // Study Date
-                (0008,0021) keep                     // Series Date
-                (0008,0030) keep                     // Study Time
-                (0008,0031) keep                     // Series Time
-
-                // UIDs - replace with new values
-                (0020,000D) := hashUID[(0020,000D)] // Study Instance UID
-                (0020,000E) := hashUID[(0020,000E)] // Series Instance UID
-                (0008,0018) := hashUID[(0008,0018)] // SOP Instance UID
-
-                // De-identification marker
-                (0012,0062) := "YES"                 // Patient Identity Removed
-                (0012,0063) := "Research Safe"      // De-identification Method
-                """;
+        return "// Research-Safe Anonymization Script\n" +
+                "// Removes identifiers while preserving clinically relevant data\n" +
+                "// Keeps dates offset, preserves age/sex/modality\n" +
+                "\n" +
+                "version \"6.3\"\n" +
+                "\n" +
+                "// Patient identifiers\n" +
+                "(0010,0010) := \"RESEARCH_SUBJECT\"    // Patient Name\n" +
+                "(0010,0020) := hashUID[(0010,0020)]  // Patient ID\n" +
+                "(0010,1000) := \"\"                    // Other Patient IDs\n" +
+                "(0010,1001) := \"\"                    // Other Patient Names\n" +
+                "(0010,1040) := \"\"                    // Patient Address\n" +
+                "(0010,2154) := \"\"                    // Patient Telephone Numbers\n" +
+                "\n" +
+                "// Preserve but keep: Age, Sex, Weight, Height (clinically relevant)\n" +
+                "(0010,0040) keep                     // Patient Sex\n" +
+                "(0010,1010) keep                     // Patient Age\n" +
+                "(0010,1020) keep                     // Patient Size\n" +
+                "(0010,1030) keep                     // Patient Weight\n" +
+                "\n" +
+                "// Institution info\n" +
+                "(0008,0080) := \"RESEARCH_SITE\"       // Institution Name\n" +
+                "(0008,0081) := \"\"                    // Institution Address\n" +
+                "(0008,0090) := \"\"                    // Referring Physician Name\n" +
+                "(0008,1050) := \"\"                    // Performing Physician Name\n" +
+                "(0008,1070) := \"\"                    // Operators Name\n" +
+                "\n" +
+                "// Keep dates (important for longitudinal studies)\n" +
+                "(0008,0020) keep                     // Study Date\n" +
+                "(0008,0021) keep                     // Series Date\n" +
+                "(0008,0030) keep                     // Study Time\n" +
+                "(0008,0031) keep                     // Series Time\n" +
+                "\n" +
+                "// UIDs - replace with new values\n" +
+                "(0020,000D) := hashUID[(0020,000D)] // Study Instance UID\n" +
+                "(0020,000E) := hashUID[(0020,000E)] // Series Instance UID\n" +
+                "(0008,0018) := hashUID[(0008,0018)] // SOP Instance UID\n" +
+                "\n" +
+                "// De-identification marker\n" +
+                "(0012,0062) := \"YES\"                 // Patient Identity Removed\n" +
+                "(0012,0063) := \"Research Safe\"      // De-identification Method\n";
     }
 
     private String getPassthroughScript() {
-        return """
-                // Passthrough Script
-                // No modifications - passes DICOM through unchanged
-                // Use this for routing without anonymization
-
-                version "6.3"
-
-                // Keep all attributes
-                """;
+        return "// Passthrough Script\n" +
+                "// No modifications - passes DICOM through unchanged\n" +
+                "// Use this for routing without anonymization\n" +
+                "\n" +
+                "version \"6.3\"\n" +
+                "\n" +
+                "// Keep all attributes\n";
     }
 
     // Data classes
