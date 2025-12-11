@@ -45,6 +45,12 @@ import java.util.stream.Collectors;
 public class ForwardManager implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(ForwardManager.class);
 
+    // Files to exclude from processing/forwarding (internal metadata files)
+    private static final Set<String> EXCLUDED_FILES = Set.of(
+            "retry_metadata.json",
+            "failure_reason.txt"
+    );
+
     private final AppConfig config;
     private final DestinationManager destinationManager;
     private final TransferTracker transferTracker;
@@ -961,6 +967,7 @@ public class ForwardManager implements AutoCloseable {
     private void copyFilesToProcessing(Path sourceDir, Path targetDir) throws IOException {
         Files.list(sourceDir)
                 .filter(Files::isRegularFile)
+                .filter(file -> !EXCLUDED_FILES.contains(file.getFileName().toString()))
                 .forEach(file -> {
                     try {
                         Files.copy(file, targetDir.resolve(file.getFileName()),

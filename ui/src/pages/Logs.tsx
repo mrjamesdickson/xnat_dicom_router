@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useFetch } from '../hooks/useApi'
+import { useFetch, getAuthToken } from '../hooks/useApi'
 
 interface LogFile {
   route: string
@@ -67,7 +67,10 @@ export default function Logs() {
   const fetchTail = async (offset: number) => {
     if (!selectedLog) return
     try {
-      const response = await fetch(`/api/logs/tail/${selectedLog.route}/${selectedLog.file}?lines=${numLines}&offset=${offset}`)
+      const headers: HeadersInit = { 'Content-Type': 'application/json' }
+      const token = getAuthToken()
+      if (token) headers['X-Auth-Token'] = token
+      const response = await fetch(`/api/logs/tail/${selectedLog.route}/${selectedLog.file}?lines=${numLines}&offset=${offset}`, { headers })
       if (response.ok) {
         const data = await response.json()
         setTailData(data)
@@ -85,7 +88,10 @@ export default function Logs() {
   const fetchTailIncremental = async () => {
     if (!selectedLog || tailOffset === 0) return
     try {
-      const response = await fetch(`/api/logs/tail/${selectedLog.route}/${selectedLog.file}?lines=${numLines}&offset=${tailOffset}`)
+      const headers: HeadersInit = { 'Content-Type': 'application/json' }
+      const token = getAuthToken()
+      if (token) headers['X-Auth-Token'] = token
+      const response = await fetch(`/api/logs/tail/${selectedLog.route}/${selectedLog.file}?lines=${numLines}&offset=${tailOffset}`, { headers })
       if (response.ok) {
         const data = await response.json()
         if (data.lines && data.lines.length > 0) {
