@@ -8,6 +8,7 @@
 package io.xnatworks.router.api;
 
 import io.xnatworks.router.anon.ScriptLibrary;
+import io.xnatworks.router.broker.HonestBrokerService;
 import io.xnatworks.router.config.AppConfig;
 import io.xnatworks.router.routing.DestinationManager;
 import io.xnatworks.router.tracking.TransferTracker;
@@ -90,6 +91,9 @@ public class AdminServer {
         final AuthResource authResource = new AuthResource(config);
         final StorageResource storageResource = new StorageResource(config);
         final LogsResource logsResource = new LogsResource(config);
+        final HonestBrokerService honestBrokerService = new HonestBrokerService(config);
+        final HonestBrokersResource honestBrokersResource = new HonestBrokersResource(config, honestBrokerService);
+        final ImportResource importResource = new ImportResource(config, destinationManager, transferTracker, scriptLibrary, honestBrokerService);
         final AuthFilter authFilter = new AuthFilter(config);
 
         ResourceConfig resourceConfig = new ResourceConfig();
@@ -107,6 +111,8 @@ public class AdminServer {
                 bind(authResource).to(AuthResource.class);
                 bind(storageResource).to(StorageResource.class);
                 bind(logsResource).to(LogsResource.class);
+                bind(honestBrokersResource).to(HonestBrokersResource.class);
+                bind(importResource).to(ImportResource.class);
             }
         });
 
@@ -120,6 +126,8 @@ public class AdminServer {
         resourceConfig.register(AuthResource.class);
         resourceConfig.register(StorageResource.class);
         resourceConfig.register(LogsResource.class);
+        resourceConfig.register(HonestBrokersResource.class);
+        resourceConfig.register(ImportResource.class);
 
         // Register auth filter
         resourceConfig.register(authFilter);

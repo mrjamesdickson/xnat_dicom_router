@@ -1,0 +1,154 @@
+# XNAT DICOM Router - Example Configuration
+# Copyright (c) 2025 XNATWorks.
+#
+# Copy this file to config.yaml and modify as needed.
+# All paths are relative to the working directory unless absolute paths are used.
+
+---
+# =============================================================================
+# XNAT Destinations
+# =============================================================================
+destinations:
+  # Primary XNAT instance
+  primary: !<xnat>
+    description: "Primary XNAT Server"
+    enabled: true
+    url: "https://xnat.example.com"
+    username: "dicom_upload"
+    password: "your-password-here"
+    timeout: 60
+    type: "xnat"
+    max_retries: 3
+    connection_pool_size: 5
+
+  # Secondary XNAT for backup/replication
+  secondary: !<xnat>
+    description: "Secondary XNAT Server"
+    enabled: false
+    url: "https://xnat-backup.example.com"
+    username: "dicom_upload"
+    password: "your-password-here"
+    timeout: 60
+    type: "xnat"
+    max_retries: 3
+    connection_pool_size: 5
+
+# =============================================================================
+# Receiver Settings
+# =============================================================================
+receiver:
+  base_dir: "/data"
+  storage_dir: "/data/incoming"
+  processed_dir: "/data/processed"
+  failed_dir: "/data/failed"
+  done_dir: "/data/done"
+
+# =============================================================================
+# Resilience Settings
+# =============================================================================
+resilience:
+  health_check_interval: 60
+  cache_dir: "/data/cache/pending"
+  max_retries: 10
+  retry_delay: 300
+  retention_days: 30
+
+# =============================================================================
+# Routes (DICOM AE Titles)
+# =============================================================================
+routes:
+  # Research MRI Route
+  - port: 11112
+    description: "Research MRI Receiver"
+    enabled: true
+    ae_title: "RESEARCH_MRI"
+    worker_threads: 4
+    max_concurrent_transfers: 4
+    study_timeout_seconds: 60
+    destinations:
+      - destination: "primary"
+        anonymize: true
+        enabled: true
+        priority: 0
+        anon_script: "hipaa_standard"
+        project_id: "RESEARCH"
+        subject_prefix: "SUBJ"
+        session_prefix: "MR"
+        auto_archive: true
+        use_honest_broker: true
+        honest_broker: "local-broker"
+
+  # Clinical CT Route (no anonymization)
+  - port: 11113
+    description: "Clinical CT Receiver"
+    enabled: true
+    ae_title: "CLINICAL_CT"
+    worker_threads: 2
+    study_timeout_seconds: 30
+    destinations:
+      - destination: "primary"
+        anonymize: false
+        enabled: true
+        project_id: "CLINICAL"
+        subject_prefix: "PAT"
+        session_prefix: "CT"
+        auto_archive: true
+        use_honest_broker: false
+
+# =============================================================================
+# Honest Broker Configuration
+# =============================================================================
+honest_brokers:
+  # Local broker with ID hashing
+  local-broker:
+    description: "Local ID Hashing Broker"
+    enabled: true
+    broker_type: "local"
+    naming_scheme: "hash"
+    patient_id_prefix: "SUBJ"
+    patient_name_prefix: "ANON"
+    replace_patient_id: true
+    replace_patient_name: true
+    cache_enabled: true
+    cache_ttl_seconds: 3600
+    cache_max_size: 10000
+
+  # Remote honest broker (example)
+  remote-broker:
+    description: "Remote Honest Broker Service"
+    enabled: false
+    broker_type: "remote"
+    sts_host: "sts.example.com"
+    api_host: "api.example.com"
+    app_name: "DicomRouter"
+    app_key: "your-app-key-here"
+    username: "service-account"
+    password: "your-password-here"
+    timeout: 30
+
+# =============================================================================
+# Notification Settings
+# =============================================================================
+notifications:
+  enabled: false
+  smtp_server: "smtp.example.com"
+  smtp_port: 587
+  smtp_use_tls: true
+  smtp_username: "notifications@example.com"
+  smtp_password: "your-password-here"
+  from_address: "dicom-router@example.com"
+  admin_email: "admin@example.com"
+  notify_on_destination_down: true
+  notify_on_destination_recovered: true
+  notify_on_forward_failure: true
+  notify_on_daily_summary: true
+
+# =============================================================================
+# Admin UI Settings
+# =============================================================================
+admin:
+  port: 9090
+  host: "0.0.0.0"
+  require_auth: true
+  username: "admin"
+  password: "change-me-in-production"

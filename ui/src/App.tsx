@@ -3,8 +3,10 @@ import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import Routes_Page from './pages/Routes'
 import Destinations from './pages/Destinations'
+import Brokers from './pages/Brokers'
 import Scripts from './pages/Scripts'
 import Transfers from './pages/Transfers'
+import Import from './pages/Import'
 import Storage from './pages/Storage'
 import Logs from './pages/Logs'
 import Settings from './pages/Settings'
@@ -73,11 +75,17 @@ function App() {
           <NavLink to="/destinations" className={location.pathname === '/destinations' ? 'active' : ''}>
             Destinations
           </NavLink>
+          <NavLink to="/brokers" className={location.pathname === '/brokers' ? 'active' : ''}>
+            Brokers
+          </NavLink>
           <NavLink to="/scripts" className={location.pathname === '/scripts' ? 'active' : ''}>
             Scripts
           </NavLink>
           <NavLink to="/transfers" className={location.pathname === '/transfers' ? 'active' : ''}>
             Transfers
+          </NavLink>
+          <NavLink to="/import" className={location.pathname === '/import' ? 'active' : ''}>
+            Import
           </NavLink>
           <NavLink to="/storage" className={location.pathname === '/storage' ? 'active' : ''}>
             Storage
@@ -117,8 +125,10 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/routes" element={<Routes_Page />} />
           <Route path="/destinations" element={<Destinations />} />
+          <Route path="/brokers" element={<Brokers />} />
           <Route path="/scripts" element={<Scripts />} />
           <Route path="/transfers" element={<Transfers />} />
+          <Route path="/import" element={<Import />} />
           <Route path="/storage" element={<Storage />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/settings" element={<Settings />} />

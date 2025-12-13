@@ -406,6 +406,12 @@ public class RoutesResource {
         if (data.containsKey("retryDelaySeconds")) {
             dest.setRetryDelaySeconds(((Number) data.get("retryDelaySeconds")).intValue());
         }
+        if (data.containsKey("useHonestBroker")) {
+            dest.setUseHonestBroker((Boolean) data.get("useHonestBroker"));
+        }
+        if (data.containsKey("honestBroker")) {
+            dest.setHonestBrokerName((String) data.get("honestBroker"));
+        }
     }
 
     private Map<String, Object> routeToMap(AppConfig.RouteConfig route) {
@@ -489,6 +495,8 @@ public class RoutesResource {
         d.put("priority", dest.getPriority());
         d.put("retryCount", dest.getRetryCount());
         d.put("retryDelaySeconds", dest.getRetryDelaySeconds());
+        d.put("useHonestBroker", dest.isUseHonestBroker());
+        d.put("honestBroker", dest.getHonestBrokerName());
         return d;
     }
 }

@@ -1,0 +1,34 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+build/
+.gradle/
+out/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Node
+ui/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and data
+*.log
+data/
+logs/
+scripts/custom/
+scripts/imported/
+
+# Config (use mounted volumes)
+config.yaml
+
+# Test files
+*.test.*
+*Test.java

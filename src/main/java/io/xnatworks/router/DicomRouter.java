@@ -8,6 +8,7 @@
 package io.xnatworks.router;
 
 import io.xnatworks.router.anon.ScriptLibrary;
+import io.xnatworks.router.broker.HonestBrokerService;
 import io.xnatworks.router.config.AppConfig;
 import io.xnatworks.router.dicom.DicomClient;
 import io.xnatworks.router.dicom.DicomReceiver;
@@ -52,7 +53,8 @@ import java.util.concurrent.Callable;
                 DicomRouter.DestinationsCommand.class,
                 DicomRouter.ScriptsCommand.class,
                 DicomRouter.QueryCommand.class,
-                DicomRouter.HistoryCommand.class
+                DicomRouter.HistoryCommand.class,
+                DicomRouter.ImportCommand.class
         })
 public class DicomRouter implements Callable<Integer> {
     private static final Logger log = LoggerFactory.getLogger(DicomRouter.class);
@@ -119,6 +121,9 @@ public class DicomRouter implements Callable<Integer> {
             StorageCleanupService cleanupService = new StorageCleanupService(config);
             cleanupService.start();
 
+            // Initialize honest broker service
+            HonestBrokerService honestBrokerService = new HonestBrokerService(config);
+
             // Determine which routes to start
             List<AppConfig.RouteConfig> routesToStart = new ArrayList<>();
             if (routes != null && !routes.isEmpty()) {
@@ -150,7 +155,7 @@ public class DicomRouter implements Callable<Integer> {
                         route,
                         config.getReceiver().getBaseDir(),
                         study -> processStudy(study, route, config, scriptLibrary,
-                                destinationManager, transferTracker)
+                                destinationManager, transferTracker, honestBrokerService)
                 );
                 receiver.start();
                 receivers.add(receiver);
@@ -231,7 +236,8 @@ public class DicomRouter implements Callable<Integer> {
                                   AppConfig config,
                                   ScriptLibrary scriptLibrary,
                                   DestinationManager destinationManager,
-                                  TransferTracker transferTracker) {
+                                  TransferTracker transferTracker,
+                                  HonestBrokerService honestBrokerService) {
             log.info("[{}] Processing study: {} ({} files)",
                     route.getAeTitle(), study.getStudyUid(), study.getFileCount());
 
@@ -303,7 +309,23 @@ public class DicomRouter implements Callable<Integer> {
                                 projectId = extractProjectId(study);
                             }
 
-                            String subjectId = generateSubjectId(study, routeDest.getSubjectPrefix());
+                            // Generate subject ID - use honest broker if configured
+                            String subjectId;
+                            if (routeDest.isUseHonestBroker() && routeDest.getHonestBrokerName() != null && honestBrokerService != null) {
+                                String originalPatientId = extractPatientId(study);
+                                String deidentifiedId = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalPatientId);
+                                if (deidentifiedId != null) {
+                                    subjectId = deidentifiedId;
+                                    log.debug("[{}] Honest broker '{}' mapped patient ID '{}' -> '{}'",
+                                            route.getAeTitle(), routeDest.getHonestBrokerName(), originalPatientId, subjectId);
+                                } else {
+                                    log.warn("[{}] Honest broker '{}' returned null for patient ID '{}', using fallback",
+                                            route.getAeTitle(), routeDest.getHonestBrokerName(), originalPatientId);
+                                    subjectId = generateSubjectId(study, routeDest.getSubjectPrefix());
+                                }
+                            } else {
+                                subjectId = generateSubjectId(study, routeDest.getSubjectPrefix());
+                            }
                             String sessionLabel = generateSessionLabel(study, routeDest.getSessionPrefix());
 
                             log.info("[{}] Uploading to XNAT {} - Project: {}, Subject: {}, Session: {}, AutoArchive: {}",
@@ -445,6 +467,22 @@ public class DicomRouter implements Callable<Integer> {
                 log.debug("Could not extract project ID from DICOM: {}", e.getMessage());
             }
             return "UPLOADED";
+        }
+
+        private String extractPatientId(DicomReceiver.ReceivedStudy study) {
+            if (study.getFiles().isEmpty()) {
+                return "UNKNOWN";
+            }
+            try {
+                File firstFile = study.getFiles().get(0);
+                org.dcm4che3.io.DicomInputStream dis = new org.dcm4che3.io.DicomInputStream(firstFile);
+                Attributes attrs = dis.readDataset();
+                dis.close();
+                return attrs.getString(Tag.PatientID, "UNKNOWN");
+            } catch (Exception e) {
+                log.debug("Could not extract patient ID from DICOM: {}", e.getMessage());
+                return "UNKNOWN";
+            }
         }
 
         private String generateSubjectId(DicomReceiver.ReceivedStudy study, String prefix) {
@@ -1020,6 +1058,401 @@ public class DicomRouter implements Callable<Integer> {
 
             System.out.println();
             System.out.println("Total: " + transfers.size() + " transfers");
+        }
+    }
+
+    // ========================================================================
+    // IMPORT COMMAND - Import DICOM files from disk to a route
+    // ========================================================================
+
+    @Command(name = "import", description = "Import DICOM files from disk and process through a route")
+    static class ImportCommand implements Callable<Integer> {
+
+        @ParentCommand
+        private DicomRouter parent;
+
+        @Parameters(index = "0", description = "Directory containing DICOM files to import")
+        private File inputDir;
+
+        @Option(names = {"-r", "--route"}, required = true, description = "Route AE Title to use for processing")
+        private String routeAeTitle;
+
+        @Option(names = {"--recursive"}, description = "Scan subdirectories recursively")
+        private boolean recursive = true;
+
+        @Option(names = {"--dry-run"}, description = "List files without processing")
+        private boolean dryRun = false;
+
+        @Option(names = {"--move"}, description = "Move files after processing (default: copy)")
+        private boolean moveFiles = false;
+
+        @Override
+        public Integer call() throws Exception {
+            if (!inputDir.exists()) {
+                System.err.println("Input directory does not exist: " + inputDir.getAbsolutePath());
+                return 1;
+            }
+
+            if (!inputDir.isDirectory()) {
+                System.err.println("Input path is not a directory: " + inputDir.getAbsolutePath());
+                return 1;
+            }
+
+            AppConfig config = AppConfig.load(parent.configFile);
+
+            // Find the route
+            AppConfig.RouteConfig route = config.findRouteByAeTitle(routeAeTitle);
+            if (route == null) {
+                System.err.println("Route not found: " + routeAeTitle);
+                System.err.println();
+                System.err.println("Available routes:");
+                for (AppConfig.RouteConfig r : config.getRoutes()) {
+                    System.err.println("  - " + r.getAeTitle() + " (port " + r.getPort() + ")");
+                }
+                return 1;
+            }
+
+            if (!route.isEnabled()) {
+                System.err.println("Route is disabled: " + routeAeTitle);
+                return 1;
+            }
+
+            System.out.println();
+            System.out.println("=========================================================");
+            System.out.println("  DICOM Import");
+            System.out.println("=========================================================");
+            System.out.println();
+            System.out.println("Input Directory: " + inputDir.getAbsolutePath());
+            System.out.println("Route:           " + route.getAeTitle() + " (port " + route.getPort() + ")");
+            System.out.println("Recursive:       " + recursive);
+            System.out.println("Mode:            " + (moveFiles ? "MOVE" : "COPY"));
+            System.out.println("Dry Run:         " + dryRun);
+            System.out.println();
+
+            // Scan for DICOM files
+            List<File> dicomFiles = scanForDicomFiles(inputDir, recursive);
+            System.out.println("Found " + dicomFiles.size() + " potential DICOM files");
+
+            if (dicomFiles.isEmpty()) {
+                System.out.println("No DICOM files found to import.");
+                return 0;
+            }
+
+            if (dryRun) {
+                System.out.println();
+                System.out.println("Dry run - files that would be processed:");
+                for (File f : dicomFiles) {
+                    System.out.println("  " + f.getAbsolutePath());
+                }
+                return 0;
+            }
+
+            // Group files by Study UID
+            Map<String, List<File>> studiesByUid = groupByStudyUid(dicomFiles);
+            System.out.println("Organized into " + studiesByUid.size() + " studies");
+            System.out.println();
+
+            // Initialize processing components
+            Path baseDir = Paths.get(config.getReceiver().getBaseDir());
+            Files.createDirectories(baseDir);
+
+            io.xnatworks.router.anon.ScriptLibrary scriptLibrary = new io.xnatworks.router.anon.ScriptLibrary(baseDir.resolve("scripts"));
+            io.xnatworks.router.tracking.TransferTracker transferTracker = new io.xnatworks.router.tracking.TransferTracker(baseDir);
+            io.xnatworks.router.routing.DestinationManager destinationManager = new io.xnatworks.router.routing.DestinationManager(config);
+            io.xnatworks.router.broker.HonestBrokerService honestBrokerService = new io.xnatworks.router.broker.HonestBrokerService(config);
+
+            // Check destinations
+            destinationManager.checkAllDestinations();
+
+            int successCount = 0;
+            int failCount = 0;
+
+            for (Map.Entry<String, List<File>> entry : studiesByUid.entrySet()) {
+                String studyUid = entry.getKey();
+                List<File> files = entry.getValue();
+
+                System.out.printf("Processing study: %s (%d files)...%n", studyUid, files.size());
+
+                try {
+                    // Copy/move files to incoming directory
+                    Path incomingDir = baseDir.resolve(route.getAeTitle()).resolve("incoming").resolve(studyUid);
+                    Files.createDirectories(incomingDir);
+
+                    long totalSize = 0;
+                    for (File srcFile : files) {
+                        Path destPath = incomingDir.resolve(srcFile.getName());
+                        if (moveFiles) {
+                            Files.move(srcFile.toPath(), destPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                        } else {
+                            Files.copy(srcFile.toPath(), destPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                        }
+                        totalSize += srcFile.length();
+                    }
+
+                    // Create a study object and process it
+                    io.xnatworks.router.dicom.DicomReceiver.ReceivedStudy study =
+                            new io.xnatworks.router.dicom.DicomReceiver.ReceivedStudy();
+                    study.setStudyUid(studyUid);
+                    study.setPath(incomingDir);
+                    study.setAeTitle(route.getAeTitle());
+                    study.setCallingAeTitle("LOCAL_IMPORT");
+                    study.setFileCount(files.size());
+                    study.setTotalSize(totalSize);
+                    study.setReceivedAt(java.time.LocalDateTime.now());
+
+                    // Process through each destination
+                    boolean allSuccess = processStudyForImport(study, route, config, scriptLibrary,
+                            destinationManager, transferTracker, honestBrokerService);
+
+                    if (allSuccess) {
+                        System.out.println("  SUCCESS");
+                        successCount++;
+                    } else {
+                        System.out.println("  PARTIAL/FAILED");
+                        failCount++;
+                    }
+                } catch (Exception e) {
+                    System.err.println("  ERROR: " + e.getMessage());
+                    log.error("Error importing study {}: {}", studyUid, e.getMessage(), e);
+                    failCount++;
+                }
+            }
+
+            System.out.println();
+            System.out.println("=========================================================");
+            System.out.println("  Import Complete");
+            System.out.println("=========================================================");
+            System.out.printf("  Successful: %d%n", successCount);
+            System.out.printf("  Failed:     %d%n", failCount);
+            System.out.println();
+
+            destinationManager.close();
+
+            return failCount > 0 ? 1 : 0;
+        }
+
+        private List<File> scanForDicomFiles(File dir, boolean recursive) {
+            List<File> results = new ArrayList<>();
+            scanDirectory(dir, results, recursive);
+            return results;
+        }
+
+        private void scanDirectory(File dir, List<File> results, boolean recursive) {
+            File[] files = dir.listFiles();
+            if (files == null) return;
+
+            for (File f : files) {
+                if (f.isFile()) {
+                    // Check if it looks like a DICOM file
+                    if (isDicomFile(f)) {
+                        results.add(f);
+                    }
+                } else if (f.isDirectory() && recursive) {
+                    scanDirectory(f, results, recursive);
+                }
+            }
+        }
+
+        private boolean isDicomFile(File file) {
+            // Check by extension first
+            String name = file.getName().toLowerCase();
+            if (name.endsWith(".dcm") || name.endsWith(".dicom")) {
+                return true;
+            }
+
+            // Check DICOM magic bytes (DICM at offset 128)
+            if (file.length() > 132) {
+                try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(file, "r")) {
+                    raf.seek(128);
+                    byte[] magic = new byte[4];
+                    raf.readFully(magic);
+                    return magic[0] == 'D' && magic[1] == 'I' && magic[2] == 'C' && magic[3] == 'M';
+                } catch (IOException e) {
+                    // Not a DICOM file
+                }
+            }
+            return false;
+        }
+
+        private Map<String, List<File>> groupByStudyUid(List<File> files) {
+            Map<String, List<File>> result = new LinkedHashMap<>();
+
+            for (File file : files) {
+                String studyUid = extractStudyUid(file);
+                result.computeIfAbsent(studyUid, k -> new ArrayList<>()).add(file);
+            }
+
+            return result;
+        }
+
+        private String extractStudyUid(File file) {
+            try (org.dcm4che3.io.DicomInputStream dis = new org.dcm4che3.io.DicomInputStream(file)) {
+                Attributes attrs = dis.readDataset();
+                String uid = attrs.getString(Tag.StudyInstanceUID);
+                if (uid != null && !uid.isEmpty()) {
+                    return uid;
+                }
+            } catch (IOException e) {
+                log.debug("Could not read Study UID from {}: {}", file.getName(), e.getMessage());
+            }
+            // Fallback: use parent directory name or generate UUID
+            return file.getParentFile().getName() + "_" + UUID.randomUUID().toString().substring(0, 8);
+        }
+
+        private boolean processStudyForImport(io.xnatworks.router.dicom.DicomReceiver.ReceivedStudy study,
+                                               AppConfig.RouteConfig route,
+                                               AppConfig config,
+                                               io.xnatworks.router.anon.ScriptLibrary scriptLibrary,
+                                               io.xnatworks.router.routing.DestinationManager destinationManager,
+                                               io.xnatworks.router.tracking.TransferTracker transferTracker,
+                                               io.xnatworks.router.broker.HonestBrokerService honestBrokerService) {
+            // Create transfer record
+            io.xnatworks.router.tracking.TransferTracker.TransferRecord transfer = transferTracker.createTransfer(
+                    route.getAeTitle(),
+                    study.getStudyUid(),
+                    study.getCallingAeTitle(),
+                    study.getFileCount(),
+                    study.getTotalSize()
+            );
+            String transferId = transfer.getId();
+            transferTracker.startProcessing(transferId);
+
+            boolean allSuccess = true;
+            boolean anySuccess = false;
+
+            for (AppConfig.RouteDestination routeDest : route.getDestinations()) {
+                if (!routeDest.isEnabled()) {
+                    continue;
+                }
+
+                String destName = routeDest.getDestination();
+                AppConfig.Destination dest = config.getDestination(destName);
+                if (dest == null || !dest.isEnabled()) {
+                    continue;
+                }
+
+                try {
+                    long startTime = System.currentTimeMillis();
+                    boolean success = false;
+                    String message = null;
+                    int filesTransferred = 0;
+
+                    if (dest instanceof AppConfig.XnatDestination) {
+                        io.xnatworks.router.xnat.XnatClient client = destinationManager.getXnatClient(destName);
+                        if (client == null || !destinationManager.isAvailable(destName)) {
+                            throw new RuntimeException("XNAT destination unavailable: " + destName);
+                        }
+
+                        // Create ZIP file
+                        File zipFile = createZipFromFiles(study.getFiles());
+                        try {
+                            String projectId = routeDest.getProjectId();
+                            if (projectId == null || projectId.isEmpty()) {
+                                projectId = "IMPORTED";
+                            }
+
+                            // Generate subject ID - use honest broker if configured
+                            String subjectId;
+                            if (routeDest.isUseHonestBroker() && routeDest.getHonestBrokerName() != null && honestBrokerService != null) {
+                                String originalPatientId = extractPatientIdFromFiles(study.getFiles());
+                                String deidentifiedId = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalPatientId);
+                                if (deidentifiedId != null) {
+                                    subjectId = deidentifiedId;
+                                } else {
+                                    subjectId = routeDest.getSubjectPrefix() + "_" + study.getStudyUid().substring(Math.max(0, study.getStudyUid().length() - 8));
+                                }
+                            } else {
+                                subjectId = generateSubjectIdFromFiles(study.getFiles(), routeDest.getSubjectPrefix());
+                            }
+
+                            String sessionLabel = routeDest.getSessionPrefix() + LocalDate.now().toString().replace("-", "") +
+                                    "_" + study.getStudyUid().substring(Math.max(0, study.getStudyUid().length() - 8));
+
+                            io.xnatworks.router.xnat.XnatClient.UploadResult result = client.uploadWithRetry(
+                                    zipFile, projectId, subjectId, sessionLabel,
+                                    routeDest.isAutoArchive(),
+                                    routeDest.getRetryCount(),
+                                    routeDest.getRetryDelaySeconds() * 1000L
+                            );
+
+                            success = result.isSuccess();
+                            filesTransferred = study.getFileCount();
+                            message = success ? "Uploaded successfully" : result.getErrorMessage();
+                        } finally {
+                            if (zipFile.exists()) {
+                                zipFile.delete();
+                            }
+                        }
+                    } else if (dest instanceof AppConfig.DicomAeDestination) {
+                        io.xnatworks.router.dicom.DicomClient client = destinationManager.getDicomClient(destName);
+                        if (client == null || !destinationManager.isAvailable(destName)) {
+                            throw new RuntimeException("DICOM destination unavailable: " + destName);
+                        }
+
+                        io.xnatworks.router.dicom.DicomClient.StoreResult storeResult = client.store(study.getFiles());
+                        success = storeResult.isSuccess();
+                        filesTransferred = storeResult.getSuccessCount();
+                        message = success ? "Sent all files" : "Sent " + storeResult.getSuccessCount() + "/" + study.getFileCount() + " files";
+                    } else if (dest instanceof AppConfig.FileDestination) {
+                        io.xnatworks.router.routing.DestinationManager.ForwardResult result =
+                                destinationManager.forwardToFile(destName, study.getFiles(), study.getStudyUid());
+                        success = result.isSuccess();
+                        filesTransferred = result.getSuccessCount();
+                        message = success ? "Copied all files" : result.getErrorMessage();
+                    }
+
+                    long duration = System.currentTimeMillis() - startTime;
+                    io.xnatworks.router.tracking.TransferTracker.DestinationStatus destStatus = success ?
+                            io.xnatworks.router.tracking.TransferTracker.DestinationStatus.SUCCESS :
+                            io.xnatworks.router.tracking.TransferTracker.DestinationStatus.FAILED;
+                    transferTracker.updateDestinationResult(transferId, destName, destStatus, message, duration, filesTransferred);
+
+                    if (success) {
+                        anySuccess = true;
+                    } else {
+                        allSuccess = false;
+                    }
+                } catch (Exception e) {
+                    log.error("Error forwarding to {}: {}", destName, e.getMessage(), e);
+                    transferTracker.updateDestinationResult(transferId, destName,
+                            io.xnatworks.router.tracking.TransferTracker.DestinationStatus.FAILED, e.getMessage(), 0, 0);
+                    allSuccess = false;
+                }
+            }
+
+            return allSuccess || anySuccess;
+        }
+
+        private File createZipFromFiles(List<File> files) throws IOException {
+            Path tempZip = Files.createTempFile("dicom_import_", ".zip");
+            try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(Files.newOutputStream(tempZip))) {
+                for (File file : files) {
+                    java.util.zip.ZipEntry entry = new java.util.zip.ZipEntry(file.getName());
+                    zos.putNextEntry(entry);
+                    Files.copy(file.toPath(), zos);
+                    zos.closeEntry();
+                }
+            }
+            return tempZip.toFile();
+        }
+
+        private String extractPatientIdFromFiles(List<File> files) {
+            if (files.isEmpty()) return "UNKNOWN";
+            try (org.dcm4che3.io.DicomInputStream dis = new org.dcm4che3.io.DicomInputStream(files.get(0))) {
+                Attributes attrs = dis.readDataset();
+                return attrs.getString(Tag.PatientID, "UNKNOWN");
+            } catch (IOException e) {
+                return "UNKNOWN";
+            }
+        }
+
+        private String generateSubjectIdFromFiles(List<File> files, String prefix) {
+            if (prefix == null) prefix = "SUBJ";
+            String patientId = extractPatientIdFromFiles(files);
+            if (!"UNKNOWN".equals(patientId)) {
+                return prefix + patientId;
+            }
+            return prefix + "_IMPORT_" + UUID.randomUUID().toString().substring(0, 8);
         }
     }
 }

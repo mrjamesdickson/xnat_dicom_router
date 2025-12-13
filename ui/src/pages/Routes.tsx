@@ -21,6 +21,16 @@ interface RouteDestination {
   priority: number
   retryCount: number
   retryDelaySeconds: number
+  useHonestBroker: boolean
+  honestBroker: string | null
+}
+
+interface HonestBroker {
+  name: string
+  description: string
+  enabled: boolean
+  type: string
+  apiHost: string
 }
 
 interface RouteDetail extends Route {
@@ -93,6 +103,8 @@ interface RouteDestFormData {
   priority: number
   retryCount: number
   retryDelaySeconds: number
+  useHonestBroker: boolean
+  honestBroker: string
 }
 
 const defaultRouteDestForm: RouteDestFormData = {
@@ -105,12 +117,15 @@ const defaultRouteDestForm: RouteDestFormData = {
   sessionPrefix: '',
   priority: 0,
   retryCount: 3,
-  retryDelaySeconds: 60
+  retryDelaySeconds: 60,
+  useHonestBroker: false,
+  honestBroker: ''
 }
 
 export default function Routes_Page() {
   const { data: routes, loading, error, refetch } = useFetch<Route[]>('/routes')
   const { data: availableDestinations } = useFetch<DestinationOption[]>('/destinations')
+  const { data: availableBrokers } = useFetch<HonestBroker[]>('/brokers')
   const [selectedRoute, setSelectedRoute] = useState<string | null>(null)
   const { data: routeDetail, refetch: refetchDetail } = useFetch<RouteDetail>(
     selectedRoute ? `/routes/${selectedRoute}` : '',
@@ -208,7 +223,9 @@ export default function Routes_Page() {
       sessionPrefix: dest.sessionPrefix || '',
       priority: dest.priority,
       retryCount: dest.retryCount,
-      retryDelaySeconds: dest.retryDelaySeconds
+      retryDelaySeconds: dest.retryDelaySeconds,
+      useHonestBroker: dest.useHonestBroker || false,
+      honestBroker: dest.honestBroker || ''
     })
     setEditingDest(dest.destination)
     setShowDestForm(true)
@@ -515,6 +532,57 @@ export default function Routes_Page() {
                     />
                   </div>
                 )}
+
+                <div className="form-group checkbox-group" style={{ gridColumn: 'span 2' }}>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={destForm.useHonestBroker}
+                      onChange={e => setDestForm({ ...destForm, useHonestBroker: e.target.checked })}
+                    />
+                    Use Honest Broker
+                  </label>
+                  <small>Replace PatientID/Name with de-identified values</small>
+                </div>
+
+                {destForm.useHonestBroker && (
+                  <>
+                    <div className="form-group">
+                      <label>Honest Broker</label>
+                      <select
+                        value={destForm.honestBroker}
+                        onChange={e => setDestForm({ ...destForm, honestBroker: e.target.value })}
+                        required={destForm.useHonestBroker}
+                      >
+                        <option value="">Select a broker...</option>
+                        {availableBrokers?.filter(b => b.enabled).map(b => (
+                          <option key={b.name} value={b.name}>
+                            {b.name} ({b.type})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={{
+                      gridColumn: 'span 2',
+                      background: 'var(--bg-secondary)',
+                      padding: '1rem',
+                      borderRadius: '8px',
+                      fontSize: '0.9em',
+                      lineHeight: '1.5'
+                    }}>
+                      <strong style={{ display: 'block', marginBottom: '0.5rem' }}>How Honest Broker Works:</strong>
+                      <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+                        <li>Original PatientID is mapped to a de-identified ID (e.g., "SUBJ-PEACEFUL-PEACOCK")</li>
+                        <li>The same input always produces the same output (deterministic)</li>
+                        <li>All mappings are stored in a crosswalk database for audit purposes</li>
+                        <li>Reverse lookup is available to recover original IDs if needed</li>
+                      </ul>
+                      <div style={{ marginTop: '0.75rem', color: 'var(--text-light)' }}>
+                        <strong>Naming schemes:</strong> adjective_animal, color_animal, nato_phonetic, sequential, hash
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="form-actions">
@@ -627,6 +695,7 @@ export default function Routes_Page() {
                   <th>Project ID</th>
                   <th>Anonymize</th>
                   <th>Script</th>
+                  <th>Honest Broker</th>
                   <th>Priority</th>
                   <th>Status</th>
                   <th>Actions</th>
@@ -656,6 +725,7 @@ export default function Routes_Page() {
                     <td>{dest.projectId || '-'}</td>
                     <td>{dest.anonymize ? 'Yes' : 'No'}</td>
                     <td>{dest.anonScript || '-'}</td>
+                    <td>{dest.useHonestBroker ? dest.honestBroker : '-'}</td>
                     <td>{dest.priority}</td>
                     <td>
                       <span className={`status-badge status-${dest.enabled ? 'up' : 'down'}`}>
@@ -682,7 +752,7 @@ export default function Routes_Page() {
                 )})}
                 {routeDetail.destinations.length === 0 && (
                   <tr>
-                    <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-light)' }}>
+                    <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-light)' }}>
                       No destinations configured for this route
                     </td>
                   </tr>

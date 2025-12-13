@@ -1,0 +1,61 @@
+# XNAT DICOM Router - Docker Compose Configuration
+# Copyright (c) 2025 XNATWorks.
+
+version: '3.8'
+
+services:
+  dicom-router:
+    image: xnatworks/dicom-router:2.0.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dicom-router
+    hostname: dicom-router
+    restart: unless-stopped
+
+    ports:
+      # Admin UI and REST API
+      - "9090:9090"
+      # DICOM receiver ports (add more as needed)
+      - "11112:11112"
+      - "11113:11113"
+      - "11114:11114"
+      - "11115:11115"
+
+    volumes:
+      # Configuration file
+      - ./config.yaml:/config/config.yaml:ro
+      # Data directory (incoming, processed, failed DICOM)
+      - dicom-data:/data
+      # Custom anonymization scripts
+      - ./scripts:/scripts:ro
+
+    environment:
+      # Java options
+      - JAVA_OPTS=-Xmx1g -Xms512m
+      # Timezone
+      - TZ=America/New_York
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    networks:
+      - dicom-net
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  dicom-data:
+    driver: local
+
+networks:
+  dicom-net:
+    driver: bridge

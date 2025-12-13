@@ -104,6 +104,13 @@ public class AppConfig {
     private NotificationConfig notifications = new NotificationConfig();
 
     /**
+     * Honest Broker configurations - maps broker name to config.
+     * Supports multiple broker services for different use cases.
+     */
+    @JsonProperty("honest_brokers")
+    private Map<String, HonestBrokerConfig> honestBrokers = new HashMap<>();
+
+    /**
      * Routing rules - maps AE Title/port listeners to destinations.
      */
     private List<RouteConfig> routes = new ArrayList<>();
@@ -279,6 +286,16 @@ public class AppConfig {
 
     public NotificationConfig getNotifications() { return notifications; }
     public void setNotifications(NotificationConfig notifications) { this.notifications = notifications; }
+
+    public Map<String, HonestBrokerConfig> getHonestBrokers() { return honestBrokers; }
+    public void setHonestBrokers(Map<String, HonestBrokerConfig> honestBrokers) { this.honestBrokers = honestBrokers; }
+
+    /**
+     * Get a specific honest broker config by name.
+     */
+    public HonestBrokerConfig getHonestBroker(String name) {
+        return honestBrokers.get(name);
+    }
 
     public List<RouteConfig> getRoutes() { return routes; }
     public void setRoutes(List<RouteConfig> routes) { this.routes = routes; }
@@ -981,6 +998,21 @@ public class AppConfig {
         @JsonProperty("retry_delay_seconds")
         private int retryDelaySeconds = 60;
 
+        /**
+         * Whether to use an honest broker for de-identification ID lookup.
+         * When enabled, PatientID and PatientName are replaced with values
+         * from the configured honest broker service.
+         */
+        @JsonProperty("use_honest_broker")
+        private boolean useHonestBroker = false;
+
+        /**
+         * Name of the honest broker configuration to use (references key in honest_brokers map).
+         * Only used when use_honest_broker is true.
+         */
+        @JsonProperty("honest_broker")
+        private String honestBrokerName;
+
         public String getDestination() { return destination; }
         public void setDestination(String destination) { this.destination = destination; }
 
@@ -1014,6 +1046,12 @@ public class AppConfig {
         public int getRetryDelaySeconds() { return retryDelaySeconds; }
         public void setRetryDelaySeconds(int retryDelaySeconds) { this.retryDelaySeconds = retryDelaySeconds; }
 
+        public boolean isUseHonestBroker() { return useHonestBroker; }
+        public void setUseHonestBroker(boolean useHonestBroker) { this.useHonestBroker = useHonestBroker; }
+
+        public String getHonestBrokerName() { return honestBrokerName; }
+        public void setHonestBrokerName(String honestBrokerName) { this.honestBrokerName = honestBrokerName; }
+
         /**
          * Get the effective anonymization script name.
          * Returns explicit script if set, otherwise returns default based on anonymize flag.
@@ -1027,8 +1065,8 @@ public class AppConfig {
 
         @Override
         public String toString() {
-            return String.format("RouteDestination{destination='%s', anonymize=%s, script='%s', projectId='%s'}",
-                    destination, anonymize, anonScript, projectId);
+            return String.format("RouteDestination{destination='%s', anonymize=%s, script='%s', projectId='%s', honestBroker=%s}",
+                    destination, anonymize, anonScript, projectId, useHonestBroker ? honestBrokerName : "disabled");
         }
     }
 
@@ -1207,6 +1245,207 @@ public class AppConfig {
 
         public boolean isNotifyOnDailySummary() { return notifyOnDailySummary; }
         public void setNotifyOnDailySummary(boolean v) { this.notifyOnDailySummary = v; }
+    }
+
+    // ========================================================================
+    // Honest Broker Configuration
+    // ========================================================================
+
+    /**
+     * Configuration for an Honest Broker service.
+     * An honest broker provides de-identification ID mapping - given an input ID (like PatientID),
+     * it returns a de-identified output ID. This is used to replace PatientID and PatientName
+     * in DICOM files during routing.
+     *
+     * <p>Supports multiple broker types/implementations. The default "local" implementation
+     * generates de-identified IDs locally using configurable naming schemes.</p>
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class HonestBrokerConfig {
+        /**
+         * Human-readable name/description for this broker.
+         */
+        private String description = "";
+
+        /**
+         * Whether this broker is enabled.
+         */
+        private boolean enabled = true;
+
+        /**
+         * Broker type - determines how de-identified IDs are generated.
+         * Currently supported: "local" (default) - generates IDs locally using naming schemes
+         */
+        @JsonProperty("broker_type")
+        private String brokerType = "local";
+
+        /**
+         * STS (Security Token Service) host for authentication.
+         * The token endpoint is: https://{stsHost}/token
+         */
+        @JsonProperty("sts_host")
+        private String stsHost;
+
+        /**
+         * API host for the de-identification lookup service.
+         * The lookup endpoint is: https://{apiHost}/DeIdentification/lookup
+         */
+        @JsonProperty("api_host")
+        private String apiHost;
+
+        /**
+         * Application name for authentication.
+         */
+        @JsonProperty("app_name")
+        private String appName;
+
+        /**
+         * Application key for authentication.
+         */
+        @JsonProperty("app_key")
+        private String appKey;
+
+        /**
+         * Username for authentication.
+         */
+        private String username;
+
+        /**
+         * Password for authentication.
+         */
+        private String password;
+
+        /**
+         * Request timeout in seconds.
+         */
+        private int timeout = 30;
+
+        /**
+         * Whether to cache lookup results to reduce API calls.
+         */
+        @JsonProperty("cache_enabled")
+        private boolean cacheEnabled = true;
+
+        /**
+         * Cache TTL in seconds (how long to keep cached results).
+         */
+        @JsonProperty("cache_ttl_seconds")
+        private int cacheTtlSeconds = 3600; // 1 hour default
+
+        /**
+         * Maximum number of entries in the cache.
+         */
+        @JsonProperty("cache_max_size")
+        private int cacheMaxSize = 10000;
+
+        /**
+         * Whether to use the broker result for PatientID replacement.
+         */
+        @JsonProperty("replace_patient_id")
+        private boolean replacePatientId = true;
+
+        /**
+         * Whether to use the broker result for PatientName replacement.
+         */
+        @JsonProperty("replace_patient_name")
+        private boolean replacePatientName = true;
+
+        /**
+         * Prefix to add to the broker result for PatientID (optional).
+         */
+        @JsonProperty("patient_id_prefix")
+        private String patientIdPrefix = "";
+
+        /**
+         * Prefix to add to the broker result for PatientName (optional).
+         */
+        @JsonProperty("patient_name_prefix")
+        private String patientNamePrefix = "";
+
+        /**
+         * Naming scheme for local broker type.
+         * Options: adjective_animal, color_animal, nato_phonetic, sequential, hash, script
+         */
+        @JsonProperty("naming_scheme")
+        private String namingScheme = "adjective_animal";
+
+        /**
+         * Custom JavaScript code for the 'script' naming scheme.
+         * The script should define a function that takes (idIn, idType, prefix, context) and returns the de-identified ID.
+         * Example:
+         * <pre>
+         * function lookup(idIn, idType, prefix, context) {
+         *   // Custom logic here
+         *   return prefix + "-" + idIn.substring(0, 4).toUpperCase();
+         * }
+         * </pre>
+         */
+        @JsonProperty("lookup_script")
+        private String lookupScript;
+
+        // Getters and setters
+        public String getDescription() { return description; }
+        public void setDescription(String description) { this.description = description; }
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+
+        public String getBrokerType() { return brokerType; }
+        public void setBrokerType(String brokerType) { this.brokerType = brokerType; }
+
+        public String getStsHost() { return stsHost; }
+        public void setStsHost(String stsHost) { this.stsHost = stsHost; }
+
+        public String getApiHost() { return apiHost; }
+        public void setApiHost(String apiHost) { this.apiHost = apiHost; }
+
+        public String getAppName() { return appName; }
+        public void setAppName(String appName) { this.appName = appName; }
+
+        public String getAppKey() { return appKey; }
+        public void setAppKey(String appKey) { this.appKey = appKey; }
+
+        public String getUsername() { return username; }
+        public void setUsername(String username) { this.username = username; }
+
+        public String getPassword() { return password; }
+        public void setPassword(String password) { this.password = password; }
+
+        public int getTimeout() { return timeout; }
+        public void setTimeout(int timeout) { this.timeout = timeout; }
+
+        public boolean isCacheEnabled() { return cacheEnabled; }
+        public void setCacheEnabled(boolean cacheEnabled) { this.cacheEnabled = cacheEnabled; }
+
+        public int getCacheTtlSeconds() { return cacheTtlSeconds; }
+        public void setCacheTtlSeconds(int cacheTtlSeconds) { this.cacheTtlSeconds = cacheTtlSeconds; }
+
+        public int getCacheMaxSize() { return cacheMaxSize; }
+        public void setCacheMaxSize(int cacheMaxSize) { this.cacheMaxSize = cacheMaxSize; }
+
+        public boolean isReplacePatientId() { return replacePatientId; }
+        public void setReplacePatientId(boolean replacePatientId) { this.replacePatientId = replacePatientId; }
+
+        public boolean isReplacePatientName() { return replacePatientName; }
+        public void setReplacePatientName(boolean replacePatientName) { this.replacePatientName = replacePatientName; }
+
+        public String getPatientIdPrefix() { return patientIdPrefix; }
+        public void setPatientIdPrefix(String patientIdPrefix) { this.patientIdPrefix = patientIdPrefix; }
+
+        public String getPatientNamePrefix() { return patientNamePrefix; }
+        public void setPatientNamePrefix(String patientNamePrefix) { this.patientNamePrefix = patientNamePrefix; }
+
+        public String getNamingScheme() { return namingScheme; }
+        public void setNamingScheme(String namingScheme) { this.namingScheme = namingScheme; }
+
+        public String getLookupScript() { return lookupScript; }
+        public void setLookupScript(String lookupScript) { this.lookupScript = lookupScript; }
+
+        @Override
+        public String toString() {
+            return String.format("HonestBrokerConfig{type='%s', apiHost='%s', enabled=%s}",
+                    brokerType, apiHost, enabled);
+        }
     }
 
     // ========================================================================

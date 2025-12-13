@@ -85,6 +85,23 @@ export function useFetch<T>(endpoint: string, pollInterval?: number): FetchState
   return { data, loading, error, refetch: fetchData }
 }
 
+export async function apiGet<T>(endpoint: string): Promise<T> {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    method: 'GET',
+    headers: getHeaders()
+  })
+  if (response.status === 401) {
+    clearAuthToken()
+    window.location.reload()
+    throw new Error('Authentication required')
+  }
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
 export async function apiPost<T>(endpoint: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_BASE}${endpoint}`, {
     method: 'POST',
@@ -143,6 +160,33 @@ export async function checkAuth(): Promise<{ authenticated: boolean; authRequire
   })
   if (!response.ok) {
     return { authenticated: false, authRequired: true }
+  }
+  return response.json()
+}
+
+/**
+ * Generic API call function that accepts method and options
+ */
+export async function apiCall<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers: {
+      ...getHeaders(),
+      ...(options?.headers || {})
+    }
+  })
+  if (response.status === 401) {
+    clearAuthToken()
+    window.location.reload()
+    throw new Error('Authentication required')
+  }
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || `HTTP ${response.status}`)
+  }
+  // Return empty object for 204 No Content
+  if (response.status === 204) {
+    return {} as T
   }
   return response.json()
 }
