@@ -459,7 +459,6 @@ public class DicomReceiver implements AutoCloseable {
 
     /**
      * Add transfer capabilities for all storage SOP classes.
-     * Uses wildcard "*" to accept any SOP class.
      */
     private void addTransferCapabilities() {
         String[] TRANSFER_SYNTAXES = {
@@ -480,13 +479,162 @@ public class DicomReceiver implements AutoCloseable {
                 UID.MPEG4HP41BD
         };
 
-        // Accept ALL storage SOP classes using wildcard
-        ae.addTransferCapability(new TransferCapability(null, "*",
-                TransferCapability.Role.SCP, TRANSFER_SYNTAXES));
+        // Comprehensive list of ALL storage SOP classes
+        String[] SOP_CLASSES = {
+                // Verification
+                UID.Verification,
+                // CT
+                UID.CTImageStorage,
+                UID.EnhancedCTImageStorage,
+                UID.LegacyConvertedEnhancedCTImageStorage,
+                // MR
+                UID.MRImageStorage,
+                UID.EnhancedMRImageStorage,
+                UID.MRSpectroscopyStorage,
+                UID.EnhancedMRColorImageStorage,
+                UID.LegacyConvertedEnhancedMRImageStorage,
+                // PET
+                UID.PositronEmissionTomographyImageStorage,
+                UID.EnhancedPETImageStorage,
+                UID.LegacyConvertedEnhancedPETImageStorage,
+                // Nuclear Medicine
+                UID.NuclearMedicineImageStorage,
+                // Ultrasound
+                UID.UltrasoundImageStorage,
+                UID.UltrasoundMultiFrameImageStorage,
+                UID.EnhancedUSVolumeStorage,
+                // Secondary Capture
+                UID.SecondaryCaptureImageStorage,
+                UID.MultiFrameSingleBitSecondaryCaptureImageStorage,
+                UID.MultiFrameGrayscaleByteSecondaryCaptureImageStorage,
+                UID.MultiFrameGrayscaleWordSecondaryCaptureImageStorage,
+                UID.MultiFrameTrueColorSecondaryCaptureImageStorage,
+                // X-Ray
+                UID.DigitalXRayImageStorageForPresentation,
+                UID.DigitalXRayImageStorageForProcessing,
+                UID.DigitalMammographyXRayImageStorageForPresentation,
+                UID.DigitalMammographyXRayImageStorageForProcessing,
+                UID.DigitalIntraOralXRayImageStorageForPresentation,
+                UID.DigitalIntraOralXRayImageStorageForProcessing,
+                UID.XRayAngiographicImageStorage,
+                UID.EnhancedXAImageStorage,
+                UID.XRayRadiofluoroscopicImageStorage,
+                UID.EnhancedXRFImageStorage,
+                UID.XRay3DAngiographicImageStorage,
+                UID.XRay3DCraniofacialImageStorage,
+                UID.BreastProjectionXRayImageStorageForPresentation,
+                UID.BreastProjectionXRayImageStorageForProcessing,
+                // Computed Radiography
+                UID.ComputedRadiographyImageStorage,
+                // Mammography
+                UID.BreastTomosynthesisImageStorage,
+                // RT
+                UID.RTImageStorage,
+                UID.RTDoseStorage,
+                UID.RTStructureSetStorage,
+                UID.RTPlanStorage,
+                UID.RTBeamsTreatmentRecordStorage,
+                UID.RTBrachyTreatmentRecordStorage,
+                UID.RTTreatmentSummaryRecordStorage,
+                UID.RTIonPlanStorage,
+                UID.RTIonBeamsTreatmentRecordStorage,
+                // Encapsulated Documents
+                UID.EncapsulatedPDFStorage,
+                UID.EncapsulatedCDAStorage,
+                UID.EncapsulatedSTLStorage,
+                UID.EncapsulatedOBJStorage,
+                UID.EncapsulatedMTLStorage,
+                // SR
+                UID.BasicTextSRStorage,
+                UID.EnhancedSRStorage,
+                UID.ComprehensiveSRStorage,
+                UID.Comprehensive3DSRStorage,
+                UID.ExtensibleSRStorage,
+                UID.MammographyCADSRStorage,
+                UID.ChestCADSRStorage,
+                UID.XRayRadiationDoseSRStorage,
+                UID.RadiopharmaceuticalRadiationDoseSRStorage,
+                UID.ColonCADSRStorage,
+                UID.ImplantationPlanSRStorage,
+                UID.AcquisitionContextSRStorage,
+                UID.SimplifiedAdultEchoSRStorage,
+                UID.PatientRadiationDoseSRStorage,
+                // Presentation States
+                UID.GrayscaleSoftcopyPresentationStateStorage,
+                UID.ColorSoftcopyPresentationStateStorage,
+                UID.PseudoColorSoftcopyPresentationStateStorage,
+                UID.BlendingSoftcopyPresentationStateStorage,
+                UID.XAXRFGrayscaleSoftcopyPresentationStateStorage,
+                UID.AdvancedBlendingPresentationStateStorage,
+                // VL (Visible Light)
+                UID.VLEndoscopicImageStorage,
+                UID.VLMicroscopicImageStorage,
+                UID.VLSlideCoordinatesMicroscopicImageStorage,
+                UID.VLPhotographicImageStorage,
+                UID.VideoEndoscopicImageStorage,
+                UID.VideoMicroscopicImageStorage,
+                UID.VideoPhotographicImageStorage,
+                UID.VLWholeSlideMicroscopyImageStorage,
+                UID.DermoscopicPhotographyImageStorage,
+                // Ophthalmic
+                UID.OphthalmicPhotography8BitImageStorage,
+                UID.OphthalmicPhotography16BitImageStorage,
+                UID.OphthalmicTomographyImageStorage,
+                UID.WideFieldOphthalmicPhotographyStereographicProjectionImageStorage,
+                UID.WideFieldOphthalmicPhotography3DCoordinatesImageStorage,
+                UID.OphthalmicOpticalCoherenceTomographyEnFaceImageStorage,
+                UID.OphthalmicOpticalCoherenceTomographyBscanVolumeAnalysisStorage,
+                // Segmentation
+                UID.SegmentationStorage,
+                UID.SurfaceSegmentationStorage,
+                // Mesh/Surface
+                UID.SurfaceScanMeshStorage,
+                UID.SurfaceScanPointCloudStorage,
+                // Raw Data
+                UID.RawDataStorage,
+                // Parametric Map
+                UID.ParametricMapStorage,
+                // Waveform
+                UID.TwelveLeadECGWaveformStorage,
+                UID.GeneralECGWaveformStorage,
+                UID.AmbulatoryECGWaveformStorage,
+                // UID.General32BitECGWaveformStorage, // Not in dcm4che 5.25
+                UID.HemodynamicWaveformStorage,
+                UID.CardiacElectrophysiologyWaveformStorage,
+                UID.BasicVoiceAudioWaveformStorage,
+                UID.ArterialPulseWaveformStorage,
+                UID.RespiratoryWaveformStorage,
+                UID.MultichannelRespiratoryWaveformStorage,
+                UID.RoutineScalpElectroencephalogramWaveformStorage,
+                UID.ElectromyogramWaveformStorage,
+                UID.ElectrooculogramWaveformStorage,
+                UID.SleepElectroencephalogramWaveformStorage,
+                UID.BodyPositionWaveformStorage,
+                // Key Object Selection
+                UID.KeyObjectSelectionDocumentStorage,
+                // Hanging Protocol
+                UID.HangingProtocolStorage,
+                // Color Palette
+                UID.ColorPaletteStorage,
+                // Generic Implant Template
+                UID.GenericImplantTemplateStorage,
+                UID.ImplantAssemblyTemplateStorage,
+                UID.ImplantTemplateGroupStorage,
+                // Tractography
+                UID.TractographyResultsStorage,
+                // Content Assessment
+                UID.ContentAssessmentResultsStorage,
+                // Corneal Topography
+                UID.CornealTopographyMapStorage,
+                // Intravascular OCT
+                UID.IntravascularOpticalCoherenceTomographyImageStorageForPresentation,
+                UID.IntravascularOpticalCoherenceTomographyImageStorageForProcessing
+        };
 
-        // Verification must be explicit
-        ae.addTransferCapability(new TransferCapability(null, UID.Verification,
-                TransferCapability.Role.SCP, UID.ImplicitVRLittleEndian));
+        for (String sopClass : SOP_CLASSES) {
+            ae.addTransferCapability(new TransferCapability(null, sopClass,
+                    TransferCapability.Role.SCP, TRANSFER_SYNTAXES));
+        }
     }
 
     private String formatBytes(long bytes) {
