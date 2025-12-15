@@ -13,6 +13,9 @@ interface Transfer {
   completedAt: string | null
   errorMessage: string | null
   durationMs: number
+  filesProcessed: number
+  bytesProcessed: number
+  progressPercent: number
   destinations: Array<{
     destination: string
     status: string
@@ -44,8 +47,9 @@ export default function Transfers() {
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [aeTitleFilter, setAeTitleFilter] = useState<string>('')
   const { data: stats } = useFetch<TransferStats>('/transfers/statistics', 30000)
+  // Poll active transfers more frequently (every 2 seconds) for live progress
   const { data: active, refetch: refetchActive } = useFetch<{ transfers: Transfer[], count: number }>(
-    '/transfers/active', 10000
+    '/transfers/active', 2000
   )
   const {
     data: transfers,
@@ -141,9 +145,12 @@ export default function Transfers() {
       </div>
 
       {active && active.count > 0 && (
-        <div className="card">
+        <div className="card" style={{ borderLeft: '4px solid var(--warning-color)' }}>
           <div className="card-header">
             <h2 className="card-title">Active Transfers ({active.count})</h2>
+            <span style={{ color: 'var(--text-light)', fontSize: '0.875rem' }}>
+              Auto-refreshing every 2s
+            </span>
           </div>
           <div className="table-container">
             <table>
@@ -151,6 +158,7 @@ export default function Transfers() {
                 <tr>
                   <th>AE Title</th>
                   <th>Study UID</th>
+                  <th>Progress</th>
                   <th>Files</th>
                   <th>Status</th>
                   <th>Started</th>
@@ -161,7 +169,39 @@ export default function Transfers() {
                   <tr key={t.transferId}>
                     <td><strong>{t.aeTitle}</strong></td>
                     <td><code style={{ fontSize: '0.75rem' }}>{t.studyUid.substring(0, 30)}...</code></td>
-                    <td>{t.fileCount}</td>
+                    <td style={{ minWidth: '150px' }}>
+                      <div style={{
+                        background: 'var(--border-color)',
+                        borderRadius: '4px',
+                        height: '20px',
+                        overflow: 'hidden',
+                        position: 'relative'
+                      }}>
+                        <div style={{
+                          background: 'linear-gradient(90deg, var(--secondary-color), var(--success-color))',
+                          height: '100%',
+                          width: `${t.progressPercent}%`,
+                          transition: 'width 0.3s ease-in-out',
+                          borderRadius: '4px'
+                        }} />
+                        <div style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: 600,
+                          fontSize: '0.75rem',
+                          color: t.progressPercent > 50 ? 'white' : 'var(--text-color)'
+                        }}>
+                          {t.progressPercent.toFixed(1)}%
+                        </div>
+                      </div>
+                    </td>
+                    <td>{t.filesProcessed} / {t.fileCount}</td>
                     <td>
                       <span style={{ color: getStatusColor(t.status) }}>
                         {t.status}

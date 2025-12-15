@@ -102,6 +102,7 @@ public class AppConfig {
     private ReceiverConfig receiver = new ReceiverConfig();
     private ResilienceConfig resilience = new ResilienceConfig();
     private NotificationConfig notifications = new NotificationConfig();
+    private OcrConfig ocr = new OcrConfig();
 
     /**
      * Honest Broker configurations - maps broker name to config.
@@ -284,6 +285,9 @@ public class AppConfig {
     public ResilienceConfig getResilience() { return resilience; }
     public void setResilience(ResilienceConfig resilience) { this.resilience = resilience; }
 
+    public OcrConfig getOcr() { return ocr; }
+    public void setOcr(OcrConfig ocr) { this.ocr = ocr; }
+
     public NotificationConfig getNotifications() { return notifications; }
     public void setNotifications(NotificationConfig notifications) { this.notifications = notifications; }
 
@@ -455,6 +459,26 @@ public class AppConfig {
         @JsonProperty("max_retries")
         private int maxRetries = 3;
 
+        /**
+         * REST API URL for the PACS server (e.g., Orthanc's HTTP API).
+         * Used for image preview functionality.
+         * Example: http://localhost:8042 for Orthanc
+         */
+        @JsonProperty("rest_api_url")
+        private String restApiUrl;
+
+        /**
+         * Username for REST API authentication.
+         */
+        @JsonProperty("rest_api_username")
+        private String restApiUsername;
+
+        /**
+         * Password for REST API authentication.
+         */
+        @JsonProperty("rest_api_password")
+        private String restApiPassword;
+
         @Override
         public String getType() { return "dicom"; }
 
@@ -481,6 +505,15 @@ public class AppConfig {
 
         public int getMaxRetries() { return maxRetries; }
         public void setMaxRetries(int maxRetries) { this.maxRetries = maxRetries; }
+
+        public String getRestApiUrl() { return restApiUrl; }
+        public void setRestApiUrl(String restApiUrl) { this.restApiUrl = restApiUrl; }
+
+        public String getRestApiUsername() { return restApiUsername; }
+        public void setRestApiUsername(String restApiUsername) { this.restApiUsername = restApiUsername; }
+
+        public String getRestApiPassword() { return restApiPassword; }
+        public void setRestApiPassword(String restApiPassword) { this.restApiPassword = restApiPassword; }
 
         @Override
         public String toString() {
@@ -621,6 +654,13 @@ public class AppConfig {
          */
         private List<RouteDestination> destinations = new ArrayList<>();
 
+        /**
+         * Auto-import uploaded files - when true, files uploaded via Storage API
+         * will automatically be processed and routed to destinations.
+         */
+        @JsonProperty("auto_import")
+        private boolean autoImport = false;
+
         public String getAeTitle() { return aeTitle; }
         public void setAeTitle(String aeTitle) { this.aeTitle = aeTitle; }
 
@@ -665,6 +705,9 @@ public class AppConfig {
 
         public List<RouteDestination> getDestinations() { return destinations; }
         public void setDestinations(List<RouteDestination> destinations) { this.destinations = destinations; }
+
+        public boolean isAutoImport() { return autoImport; }
+        public void setAutoImport(boolean autoImport) { this.autoImport = autoImport; }
 
         @Override
         public String toString() {
@@ -1013,6 +1056,34 @@ public class AppConfig {
         @JsonProperty("honest_broker")
         private String honestBrokerName;
 
+        /**
+         * Whether to enable OCR-based PHI detection in pixel data.
+         * When enabled, images are scanned for burned-in text and PHI regions
+         * are identified for potential redaction.
+         */
+        @JsonProperty("ocr_enabled")
+        private boolean ocrEnabled = false;
+
+        /**
+         * Whether to automatically apply pixel redaction to detected PHI regions.
+         * Requires ocr_enabled=true. If false, PHI is detected and logged but not redacted.
+         */
+        @JsonProperty("ocr_redact")
+        private boolean ocrRedact = false;
+
+        /**
+         * Minimum OCR confidence threshold (0-100) for text detection.
+         * Text detected with lower confidence will be ignored.
+         */
+        @JsonProperty("ocr_confidence_threshold")
+        private float ocrConfidenceThreshold = 60.0f;
+
+        /**
+         * Padding (in pixels) to add around detected PHI regions when redacting.
+         */
+        @JsonProperty("ocr_redact_padding")
+        private int ocrRedactPadding = 2;
+
         public String getDestination() { return destination; }
         public void setDestination(String destination) { this.destination = destination; }
 
@@ -1052,6 +1123,18 @@ public class AppConfig {
         public String getHonestBrokerName() { return honestBrokerName; }
         public void setHonestBrokerName(String honestBrokerName) { this.honestBrokerName = honestBrokerName; }
 
+        public boolean isOcrEnabled() { return ocrEnabled; }
+        public void setOcrEnabled(boolean ocrEnabled) { this.ocrEnabled = ocrEnabled; }
+
+        public boolean isOcrRedact() { return ocrRedact; }
+        public void setOcrRedact(boolean ocrRedact) { this.ocrRedact = ocrRedact; }
+
+        public float getOcrConfidenceThreshold() { return ocrConfidenceThreshold; }
+        public void setOcrConfidenceThreshold(float ocrConfidenceThreshold) { this.ocrConfidenceThreshold = ocrConfidenceThreshold; }
+
+        public int getOcrRedactPadding() { return ocrRedactPadding; }
+        public void setOcrRedactPadding(int ocrRedactPadding) { this.ocrRedactPadding = ocrRedactPadding; }
+
         /**
          * Get the effective anonymization script name.
          * Returns explicit script if set, otherwise returns default based on anonymize flag.
@@ -1065,8 +1148,10 @@ public class AppConfig {
 
         @Override
         public String toString() {
-            return String.format("RouteDestination{destination='%s', anonymize=%s, script='%s', projectId='%s', honestBroker=%s}",
-                    destination, anonymize, anonScript, projectId, useHonestBroker ? honestBrokerName : "disabled");
+            return String.format("RouteDestination{destination='%s', anonymize=%s, script='%s', projectId='%s', honestBroker=%s, ocr=%s}",
+                    destination, anonymize, anonScript, projectId,
+                    useHonestBroker ? honestBrokerName : "disabled",
+                    ocrEnabled ? (ocrRedact ? "redact" : "detect") : "disabled");
         }
     }
 
@@ -1137,6 +1222,59 @@ public class AppConfig {
         public String getFailedDir(String aeTitle) {
             return baseDir + "/" + aeTitle + "/failed";
         }
+    }
+
+    /**
+     * OCR configuration for burned-in PHI detection.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class OcrConfig {
+        /**
+         * Whether OCR is enabled globally.
+         */
+        private boolean enabled = true;
+
+        /**
+         * Path to tessdata directory containing language data files.
+         * If not specified, common locations will be searched:
+         * - /usr/local/share/tessdata (Homebrew macOS)
+         * - /usr/share/tesseract-ocr/4.00/tessdata (Ubuntu/Debian)
+         * - /usr/share/tessdata (Other Linux)
+         */
+        @JsonProperty("tessdata_path")
+        private String tessdataPath;
+
+        /**
+         * OCR language (default: eng for English).
+         */
+        private String language = "eng";
+
+        /**
+         * Default confidence threshold for text detection (0-100).
+         */
+        @JsonProperty("confidence_threshold")
+        private float confidenceThreshold = 60.0f;
+
+        /**
+         * Default padding in pixels around detected PHI regions.
+         */
+        @JsonProperty("redact_padding")
+        private int redactPadding = 2;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+
+        public String getTessdataPath() { return tessdataPath; }
+        public void setTessdataPath(String tessdataPath) { this.tessdataPath = tessdataPath; }
+
+        public String getLanguage() { return language; }
+        public void setLanguage(String language) { this.language = language; }
+
+        public float getConfidenceThreshold() { return confidenceThreshold; }
+        public void setConfidenceThreshold(float confidenceThreshold) { this.confidenceThreshold = confidenceThreshold; }
+
+        public int getRedactPadding() { return redactPadding; }
+        public void setRedactPadding(int redactPadding) { this.redactPadding = redactPadding; }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

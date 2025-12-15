@@ -319,21 +319,20 @@ public class DestinationManager implements AutoCloseable {
 
     /**
      * Forward files to a file destination.
+     * Organizes files into StudyUID/SeriesUID/SOPInstanceUID.dcm hierarchy.
      */
     public ForwardResult forwardToFile(String destinationName, List<File> files,
-                                        String subDir) throws IOException {
+                                        String baseSubDir) throws IOException {
         AppConfig.Destination dest = config.getDestination(destinationName);
         if (!(dest instanceof AppConfig.FileDestination)) {
             throw new IllegalArgumentException("Destination '" + destinationName + "' is not a file destination");
         }
 
         AppConfig.FileDestination fileDest = (AppConfig.FileDestination) dest;
-        Path targetDir = Paths.get(fileDest.getPath());
-        if (subDir != null && !subDir.isEmpty()) {
-            targetDir = targetDir.resolve(subDir);
+        Path basePath = Paths.get(fileDest.getPath());
+        if (baseSubDir != null && !baseSubDir.isEmpty()) {
+            basePath = basePath.resolve(baseSubDir);
         }
-
-        Files.createDirectories(targetDir);
 
         ForwardResult result = new ForwardResult();
         result.setDestination(destinationName);
@@ -341,12 +340,28 @@ public class DestinationManager implements AutoCloseable {
 
         long startTime = System.currentTimeMillis();
 
+        // Process each file and organize by Study/Series/Instance hierarchy
         for (File file : files) {
             try {
-                Path target = targetDir.resolve(file.getName());
-                Files.copy(file.toPath(), target);
+                // Read DICOM UIDs from file
+                DicomFileInfo info = readDicomUIDs(file);
+
+                // Build target path: basePath/SeriesUID/SOPInstanceUID.dcm
+                // (StudyUID should already be in baseSubDir if using {StudyInstanceUID} pattern)
+                Path targetDir = basePath;
+                if (info.seriesInstanceUID != null) {
+                    targetDir = targetDir.resolve(info.seriesInstanceUID);
+                }
+                Files.createDirectories(targetDir);
+
+                // Use SOPInstanceUID.dcm as filename, or original name if not available
+                String targetFileName = info.sopInstanceUID != null ?
+                        info.sopInstanceUID + ".dcm" : file.getName();
+                Path target = targetDir.resolve(targetFileName);
+
+                Files.copy(file.toPath(), target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 result.incrementSuccess();
-            } catch (IOException e) {
+            } catch (Exception e) {
                 log.error("Failed to copy file {}: {}", file.getName(), e.getMessage());
                 result.incrementFailed();
             }
@@ -354,6 +369,28 @@ public class DestinationManager implements AutoCloseable {
 
         result.setDurationMs(System.currentTimeMillis() - startTime);
         return result;
+    }
+
+    /**
+     * Read Study/Series/SOP Instance UIDs from a DICOM file.
+     */
+    private DicomFileInfo readDicomUIDs(File file) {
+        DicomFileInfo info = new DicomFileInfo();
+        try (org.dcm4che3.io.DicomInputStream dis = new org.dcm4che3.io.DicomInputStream(file)) {
+            org.dcm4che3.data.Attributes attrs = dis.readDataset();
+            info.studyInstanceUID = attrs.getString(org.dcm4che3.data.Tag.StudyInstanceUID);
+            info.seriesInstanceUID = attrs.getString(org.dcm4che3.data.Tag.SeriesInstanceUID);
+            info.sopInstanceUID = attrs.getString(org.dcm4che3.data.Tag.SOPInstanceUID);
+        } catch (Exception e) {
+            log.debug("Could not read DICOM UIDs from {}: {}", file.getName(), e.getMessage());
+        }
+        return info;
+    }
+
+    private static class DicomFileInfo {
+        String studyInstanceUID;
+        String seriesInstanceUID;
+        String sopInstanceUID;
     }
 
     @Override

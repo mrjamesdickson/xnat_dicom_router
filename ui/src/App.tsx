@@ -8,9 +8,12 @@ import Scripts from './pages/Scripts'
 import Transfers from './pages/Transfers'
 import Import from './pages/Import'
 import Storage from './pages/Storage'
+import DicomViewer from './pages/DicomViewer'
 import Logs from './pages/Logs'
 import Settings from './pages/Settings'
 import Login from './pages/Login'
+import OCR from './pages/OCR'
+import QueryRetrieve from './pages/QueryRetrieve'
 import { checkAuth, setAuthToken, clearAuthToken, getAuthToken } from './hooks/useApi'
 
 const APP_VERSION = '2.0.0'
@@ -149,12 +152,31 @@ function AboutModal({ isOpen, onClose }: AboutModalProps) {
   )
 }
 
+type Theme = 'light' | 'dark' | 'high-contrast' | 'ocean'
+
+const THEME_LABELS: Record<Theme, string> = {
+  'light': 'Light',
+  'dark': 'Dark',
+  'high-contrast': 'High Contrast',
+  'ocean': 'Ocean'
+}
+
 function App() {
   const location = useLocation()
   const [authenticated, setAuthenticated] = useState<boolean | null>(null)
   const [authRequired, setAuthRequired] = useState(true)
   const [username, setUsername] = useState<string | null>(null)
   const [showAbout, setShowAbout] = useState(false)
+  const [theme, setTheme] = useState<Theme>(() => {
+    const saved = localStorage.getItem('theme')
+    return (saved as Theme) || 'light'
+  })
+
+  // Apply theme to document
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('theme', theme)
+  }, [theme])
 
   useEffect(() => {
     const verifyAuth = async () => {
@@ -218,8 +240,14 @@ function App() {
           <NavLink to="/scripts" className={location.pathname === '/scripts' ? 'active' : ''}>
             Scripts
           </NavLink>
+          <NavLink to="/ocr" className={location.pathname === '/ocr' ? 'active' : ''}>
+            OCR
+          </NavLink>
           <NavLink to="/transfers" className={location.pathname === '/transfers' ? 'active' : ''}>
             Transfers
+          </NavLink>
+          <NavLink to="/query-retrieve" className={location.pathname === '/query-retrieve' ? 'active' : ''}>
+            Q/R
           </NavLink>
           <NavLink to="/import" className={location.pathname === '/import' ? 'active' : ''}>
             Import
@@ -235,42 +263,26 @@ function App() {
           </NavLink>
         </nav>
         <div className="header-user">
+          <select
+            value={theme}
+            onChange={(e) => setTheme(e.target.value as Theme)}
+            title="Theme"
+          >
+            {(Object.keys(THEME_LABELS) as Theme[]).map(t => (
+              <option key={t} value={t}>{THEME_LABELS[t]}</option>
+            ))}
+          </select>
           <button
+            className="about-btn"
             onClick={() => setShowAbout(true)}
-            style={{
-              background: 'rgba(255,255,255,0.2)',
-              border: 'none',
-              color: 'white',
-              width: '32px',
-              height: '32px',
-              borderRadius: '50%',
-              cursor: 'pointer',
-              fontSize: '1rem',
-              fontWeight: 'bold',
-              marginRight: '1rem',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
             title="About"
           >
             ?
           </button>
           {username && (
             <>
-              <span style={{ marginRight: '1rem', opacity: 0.8 }}>{username}</span>
-              <button
-                onClick={handleLogout}
-                style={{
-                  background: 'rgba(255,255,255,0.2)',
-                  border: 'none',
-                  color: 'white',
-                  padding: '0.5rem 1rem',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '0.9rem'
-                }}
-              >
+              <span style={{ opacity: 0.8 }}>{username}</span>
+              <button onClick={handleLogout}>
                 Logout
               </button>
             </>
@@ -287,9 +299,12 @@ function App() {
           <Route path="/destinations" element={<Destinations />} />
           <Route path="/brokers" element={<Brokers />} />
           <Route path="/scripts" element={<Scripts />} />
+          <Route path="/ocr" element={<OCR />} />
           <Route path="/transfers" element={<Transfers />} />
+          <Route path="/query-retrieve" element={<QueryRetrieve />} />
           <Route path="/import" element={<Import />} />
           <Route path="/storage" element={<Storage />} />
+          <Route path="/dicom-viewer" element={<DicomViewer />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>

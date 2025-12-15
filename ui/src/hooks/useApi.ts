@@ -190,3 +190,24 @@ export async function apiCall<T>(endpoint: string, options?: RequestInit): Promi
   }
   return response.json()
 }
+
+/**
+ * Fetch an image with authentication and return a blob URL
+ */
+export async function apiFetchImageUrl(endpoint: string): Promise<string> {
+  const headers: HeadersInit = {}
+  if (authToken) {
+    headers['X-Auth-Token'] = authToken
+  }
+  const response = await fetch(`${API_BASE}${endpoint}`, { headers })
+  if (response.status === 401) {
+    clearAuthToken()
+    window.location.reload()
+    throw new Error('Authentication required')
+  }
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+  const blob = await response.blob()
+  return URL.createObjectURL(blob)
+}

@@ -23,6 +23,10 @@ interface RouteDestination {
   retryDelaySeconds: number
   useHonestBroker: boolean
   honestBroker: string | null
+  ocrEnabled: boolean
+  ocrRedact: boolean
+  ocrConfidenceThreshold: number
+  ocrRedactPadding: number
 }
 
 interface HonestBroker {
@@ -31,6 +35,12 @@ interface HonestBroker {
   enabled: boolean
   type: string
   apiHost: string
+}
+
+interface Script {
+  name: string
+  description: string | null
+  builtIn: boolean
 }
 
 interface RouteDetail extends Route {
@@ -105,6 +115,10 @@ interface RouteDestFormData {
   retryDelaySeconds: number
   useHonestBroker: boolean
   honestBroker: string
+  ocrEnabled: boolean
+  ocrRedact: boolean
+  ocrConfidenceThreshold: number
+  ocrRedactPadding: number
 }
 
 const defaultRouteDestForm: RouteDestFormData = {
@@ -119,13 +133,18 @@ const defaultRouteDestForm: RouteDestFormData = {
   retryCount: 3,
   retryDelaySeconds: 60,
   useHonestBroker: false,
-  honestBroker: ''
+  honestBroker: '',
+  ocrEnabled: false,
+  ocrRedact: false,
+  ocrConfidenceThreshold: 60,
+  ocrRedactPadding: 2
 }
 
 export default function Routes_Page() {
   const { data: routes, loading, error, refetch } = useFetch<Route[]>('/routes')
   const { data: availableDestinations } = useFetch<DestinationOption[]>('/destinations')
   const { data: availableBrokers } = useFetch<HonestBroker[]>('/brokers')
+  const { data: availableScripts } = useFetch<Script[]>('/scripts')
   const [selectedRoute, setSelectedRoute] = useState<string | null>(null)
   const { data: routeDetail, refetch: refetchDetail } = useFetch<RouteDetail>(
     selectedRoute ? `/routes/${selectedRoute}` : '',
@@ -225,7 +244,11 @@ export default function Routes_Page() {
       retryCount: dest.retryCount,
       retryDelaySeconds: dest.retryDelaySeconds,
       useHonestBroker: dest.useHonestBroker || false,
-      honestBroker: dest.honestBroker || ''
+      honestBroker: dest.honestBroker || '',
+      ocrEnabled: dest.ocrEnabled || false,
+      ocrRedact: dest.ocrRedact || false,
+      ocrConfidenceThreshold: dest.ocrConfidenceThreshold ?? 60,
+      ocrRedactPadding: dest.ocrRedactPadding ?? 2
     })
     setEditingDest(dest.destination)
     setShowDestForm(true)
@@ -524,13 +547,83 @@ export default function Routes_Page() {
                 {destForm.anonymize && (
                   <div className="form-group" style={{ gridColumn: 'span 2' }}>
                     <label>Anonymization Script</label>
-                    <input
-                      type="text"
+                    <select
                       value={destForm.anonScript}
                       onChange={e => setDestForm({ ...destForm, anonScript: e.target.value })}
-                      placeholder="Script name from library"
-                    />
+                    >
+                      {/* Show "Use XNAT defaults" only for XNAT destinations */}
+                      {availableDestinations?.find(d => d.name === destForm.destination)?.type === 'xnat' && (
+                        <option value="">Use XNAT defaults</option>
+                      )}
+                      {/* Show "None" for non-XNAT destinations */}
+                      {availableDestinations?.find(d => d.name === destForm.destination)?.type !== 'xnat' && (
+                        <option value="">Select a script...</option>
+                      )}
+                      {availableScripts?.map(script => (
+                        <option key={script.name} value={script.name}>
+                          {script.name} {script.builtIn ? '(built-in)' : '(custom)'}
+                        </option>
+                      ))}
+                    </select>
+                    {availableDestinations?.find(d => d.name === destForm.destination)?.type === 'xnat' && !destForm.anonScript && (
+                      <small>Will use the anonymization script configured in XNAT for this project</small>
+                    )}
                   </div>
+                )}
+
+                <div className="form-group checkbox-group" style={{ gridColumn: 'span 2' }}>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={destForm.ocrEnabled}
+                      onChange={e => setDestForm({ ...destForm, ocrEnabled: e.target.checked, ocrRedact: e.target.checked ? destForm.ocrRedact : false })}
+                    />
+                    OCR PHI Detection
+                  </label>
+                  <small>Scan pixel data for burned-in patient information using OCR</small>
+                </div>
+
+                {destForm.ocrEnabled && (
+                  <>
+                    <div className="form-group checkbox-group">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={destForm.ocrRedact}
+                          onChange={e => setDestForm({ ...destForm, ocrRedact: e.target.checked })}
+                        />
+                        Auto-redact detected PHI
+                      </label>
+                      <small>Black out detected text regions</small>
+                    </div>
+
+                    <div className="form-group">
+                      <label>Confidence Threshold (%)</label>
+                      <input
+                        type="number"
+                        value={destForm.ocrConfidenceThreshold}
+                        onChange={e => setDestForm({ ...destForm, ocrConfidenceThreshold: parseFloat(e.target.value) || 60 })}
+                        min={0}
+                        max={100}
+                        step={5}
+                      />
+                      <small>Minimum OCR confidence (0-100)</small>
+                    </div>
+
+                    {destForm.ocrRedact && (
+                      <div className="form-group">
+                        <label>Redact Padding (pixels)</label>
+                        <input
+                          type="number"
+                          value={destForm.ocrRedactPadding}
+                          onChange={e => setDestForm({ ...destForm, ocrRedactPadding: parseInt(e.target.value) || 2 })}
+                          min={0}
+                          max={20}
+                        />
+                        <small>Padding around redacted regions</small>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 <div className="form-group checkbox-group" style={{ gridColumn: 'span 2' }}>

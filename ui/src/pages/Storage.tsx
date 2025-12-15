@@ -1,5 +1,16 @@
-import { useState } from 'react'
-import { useFetch, apiPost, apiDelete } from '../hooks/useApi'
+import { useState, useRef, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useFetch, apiPost, apiDelete, getAuthToken } from '../hooks/useApi'
+
+interface UploadResult {
+  message: string
+  route: string
+  studyFolder: string
+  filesUploaded: number
+  totalFiles: number
+  uploadedFiles: string[]
+  errors?: string[]
+}
 
 interface RouteStorage {
   name: string
@@ -72,11 +83,20 @@ interface BrowseResult {
 }
 
 export default function Storage() {
+  const navigate = useNavigate()
   const { data: overview, loading, error, refetch } = useFetch<StorageOverview>('/storage', 30000)
   const [selectedRoute, setSelectedRoute] = useState<string | null>(null)
   const [selectedStudy, setSelectedStudy] = useState<{ route: string; folder: string; status: string } | null>(null)
   const [browsePath, setBrowsePath] = useState<string | null>(null)
   const [actionInProgress, setActionInProgress] = useState<string | null>(null)
+
+  // Upload state
+  const [showUploadModal, setShowUploadModal] = useState(false)
+  const [uploadRoute, setUploadRoute] = useState<string | null>(null)
+  const [uploadFiles, setUploadFiles] = useState<File[]>([])
+  const [uploadProgress, setUploadProgress] = useState<{ uploading: boolean; progress: number; result?: UploadResult; error?: string }>({ uploading: false, progress: 0 })
+  const [isDragging, setIsDragging] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { data: routeDetail, refetch: refetchRoute } = useFetch<RouteStorageDetail>(
     selectedRoute ? `/storage/routes/${selectedRoute}` : null,
@@ -149,6 +169,24 @@ export default function Storage() {
     }
   }
 
+  const handleMoveToImport = async (route: string, folder: string, status: string = 'incoming') => {
+    if (!confirm(`Move this study to import for processing?\n\nRoute: ${route}\nFolder: ${folder}\n\nThis will trigger routing to configured destinations.`)) {
+      return
+    }
+
+    setActionInProgress(`import-${folder}`)
+    try {
+      await apiPost(`/storage/routes/${route}/studies/${folder}/move-to-import?status=${status}`, {})
+      alert('Study queued for import processing')
+      refetchRoute()
+      refetch()
+    } catch (err) {
+      alert('Failed to move to import: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    } finally {
+      setActionInProgress(null)
+    }
+  }
+
   const handleReprocessAllCompleted = async (route: string) => {
     if (!confirm(`Move ALL completed studies back to incoming for reprocessing?\n\nRoute: ${route}\n\nThis will re-upload all studies to the destination.`)) {
       return
@@ -195,6 +233,359 @@ export default function Storage() {
       case 'failed': return 'var(--danger-color)'
       default: return 'inherit'
     }
+  }
+
+  // Upload handlers
+  const openUploadModal = (route: string) => {
+    setUploadRoute(route)
+    setUploadFiles([])
+    setUploadProgress({ uploading: false, progress: 0 })
+    setShowUploadModal(true)
+  }
+
+  const closeUploadModal = () => {
+    setShowUploadModal(false)
+    setUploadRoute(null)
+    setUploadFiles([])
+    setUploadProgress({ uploading: false, progress: 0 })
+  }
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+
+    const items = e.dataTransfer.items
+    const files: File[] = []
+
+    // Process dropped items (files and folders)
+    const processEntry = async (entry: FileSystemEntry): Promise<File[]> => {
+      const result: File[] = []
+      if (entry.isFile) {
+        const fileEntry = entry as FileSystemFileEntry
+        const file = await new Promise<File>((resolve, reject) => {
+          fileEntry.file(resolve, reject)
+        })
+        result.push(file)
+      } else if (entry.isDirectory) {
+        const dirEntry = entry as FileSystemDirectoryEntry
+        const reader = dirEntry.createReader()
+        const entries = await new Promise<FileSystemEntry[]>((resolve, reject) => {
+          reader.readEntries(resolve, reject)
+        })
+        for (const childEntry of entries) {
+          const childFiles = await processEntry(childEntry)
+          result.push(...childFiles)
+        }
+      }
+      return result
+    }
+
+    // Handle dropped items
+    const promises: Promise<File[]>[] = []
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      const entry = item.webkitGetAsEntry()
+      if (entry) {
+        promises.push(processEntry(entry))
+      }
+    }
+
+    Promise.all(promises).then(results => {
+      const allFiles = results.flat()
+      setUploadFiles(prev => [...prev, ...allFiles])
+    })
+  }, [])
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (files) {
+      setUploadFiles(prev => [...prev, ...Array.from(files)])
+    }
+  }
+
+  const removeFile = (index: number) => {
+    setUploadFiles(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B'
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
+  }
+
+  const handleUpload = async () => {
+    if (!uploadRoute || uploadFiles.length === 0) return
+
+    setUploadProgress({ uploading: true, progress: 0 })
+
+    const formData = new FormData()
+    uploadFiles.forEach(file => {
+      formData.append('files', file)
+    })
+
+    try {
+      const response = await fetch(`/api/storage/routes/${uploadRoute}/upload`, {
+        method: 'POST',
+        headers: {
+          'X-Auth-Token': getAuthToken() || ''
+        },
+        body: formData
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Upload failed: ${response.status}`)
+      }
+
+      const result = await response.json() as UploadResult
+      setUploadProgress({ uploading: false, progress: 100, result })
+
+      // Refresh the route data
+      refetchRoute()
+      refetch()
+    } catch (err) {
+      setUploadProgress({
+        uploading: false,
+        progress: 0,
+        error: err instanceof Error ? err.message : 'Upload failed'
+      })
+    }
+  }
+
+  // Upload modal component
+  const renderUploadModal = () => {
+    if (!showUploadModal || !uploadRoute) return null
+
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}
+        onClick={closeUploadModal}
+      >
+        <div
+          style={{
+            background: 'white',
+            borderRadius: '8px',
+            padding: '1.5rem',
+            width: '600px',
+            maxWidth: '90vw',
+            maxHeight: '80vh',
+            overflow: 'auto'
+          }}
+          onClick={e => e.stopPropagation()}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h2 style={{ margin: 0 }}>Upload to {uploadRoute}</h2>
+            <button
+              onClick={closeUploadModal}
+              style={{
+                background: 'none',
+                border: 'none',
+                fontSize: '1.5rem',
+                cursor: 'pointer',
+                padding: '0.25rem'
+              }}
+            >
+              x
+            </button>
+          </div>
+
+          {uploadProgress.result ? (
+            <div>
+              <div style={{
+                background: 'var(--success-color)',
+                color: 'white',
+                padding: '1rem',
+                borderRadius: '4px',
+                marginBottom: '1rem'
+              }}>
+                <strong>Upload Complete!</strong>
+                <p style={{ margin: '0.5rem 0 0' }}>
+                  {uploadProgress.result.totalFiles} files uploaded to folder: {uploadProgress.result.studyFolder}
+                </p>
+              </div>
+              <button className="btn btn-primary" onClick={closeUploadModal}>
+                Close
+              </button>
+            </div>
+          ) : uploadProgress.error ? (
+            <div>
+              <div style={{
+                background: 'var(--danger-color)',
+                color: 'white',
+                padding: '1rem',
+                borderRadius: '4px',
+                marginBottom: '1rem'
+              }}>
+                <strong>Upload Failed</strong>
+                <p style={{ margin: '0.5rem 0 0' }}>{uploadProgress.error}</p>
+              </div>
+              <button className="btn btn-secondary" onClick={() => setUploadProgress({ uploading: false, progress: 0 })}>
+                Try Again
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Drop zone */}
+              <div
+                onDragEnter={handleDragEnter}
+                onDragLeave={handleDragLeave}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+                style={{
+                  border: `2px dashed ${isDragging ? 'var(--primary-color)' : '#ccc'}`,
+                  borderRadius: '8px',
+                  padding: '2rem',
+                  textAlign: 'center',
+                  marginBottom: '1rem',
+                  background: isDragging ? 'rgba(52, 152, 219, 0.1)' : '#f9f9f9',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>
+                  {isDragging ? '+' : 'o'}
+                </div>
+                <p style={{ margin: 0, fontWeight: 500 }}>
+                  {isDragging ? 'Drop files here' : 'Drag & drop files or folders here'}
+                </p>
+                <p style={{ margin: '0.5rem 0 0', fontSize: '0.875rem', color: '#666' }}>
+                  or click to select files
+                </p>
+                <p style={{ margin: '0.5rem 0 0', fontSize: '0.75rem', color: '#999' }}>
+                  Supports: DICOM files, ZIP, TAR, TAR.GZ archives
+                </p>
+              </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                style={{ display: 'none' }}
+                onChange={handleFileSelect}
+              />
+
+              {/* File list */}
+              {uploadFiles.length > 0 && (
+                <div style={{ marginBottom: '1rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <strong>{uploadFiles.length} file{uploadFiles.length !== 1 ? 's' : ''} selected</strong>
+                    <button
+                      className="btn btn-secondary"
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                      onClick={() => setUploadFiles([])}
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                  <div style={{ maxHeight: '200px', overflow: 'auto', border: '1px solid #eee', borderRadius: '4px' }}>
+                    {uploadFiles.map((file, index) => (
+                      <div
+                        key={index}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '0.5rem',
+                          borderBottom: index < uploadFiles.length - 1 ? '1px solid #eee' : 'none'
+                        }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {file.name}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: '#666' }}>
+                            {formatFileSize(file.size)}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => removeFile(index)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: 'var(--danger-color)',
+                            cursor: 'pointer',
+                            padding: '0.25rem'
+                          }}
+                        >
+                          x
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Progress bar */}
+              {uploadProgress.uploading && (
+                <div style={{ marginBottom: '1rem' }}>
+                  <div style={{
+                    background: '#eee',
+                    borderRadius: '4px',
+                    height: '8px',
+                    overflow: 'hidden'
+                  }}>
+                    <div style={{
+                      background: 'var(--primary-color)',
+                      height: '100%',
+                      width: '100%',
+                      animation: 'progress-indeterminate 1.5s infinite ease-in-out'
+                    }} />
+                  </div>
+                  <p style={{ margin: '0.5rem 0 0', textAlign: 'center', fontSize: '0.875rem' }}>
+                    Uploading...
+                  </p>
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                <button className="btn btn-secondary" onClick={closeUploadModal} disabled={uploadProgress.uploading}>
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleUpload}
+                  disabled={uploadFiles.length === 0 || uploadProgress.uploading}
+                >
+                  {uploadProgress.uploading ? 'Uploading...' : `Upload ${uploadFiles.length} file${uploadFiles.length !== 1 ? 's' : ''}`}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    )
   }
 
   if (loading) {
@@ -297,7 +688,7 @@ export default function Storage() {
   if (selectedStudy && studyDetail) {
     return (
       <div>
-        <div className="card">
+          <div className="card">
           <div className="card-header">
             <h2 className="card-title">Study Details</h2>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -363,6 +754,7 @@ export default function Storage() {
                   <th>Name</th>
                   <th>Size</th>
                   <th>Modified</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -371,6 +763,18 @@ export default function Storage() {
                     <td><code style={{ fontSize: '0.75rem' }}>{file.name}</code></td>
                     <td>{file.sizeFormatted}</td>
                     <td>{file.modified}</td>
+                    <td>
+                      <button
+                        className="btn btn-secondary"
+                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                        onClick={() => {
+                          const relativePath = `${selectedStudy!.route}/${selectedStudy!.status}/${selectedStudy!.folder}/${file.name}`
+                          navigate(`/dicom-viewer?path=${encodeURIComponent(relativePath)}`)
+                        }}
+                      >
+                        Preview
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -445,6 +849,16 @@ export default function Storage() {
                           >
                             View
                           </button>
+                          {status === 'incoming' && (
+                            <button
+                              className="btn btn-primary"
+                              style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
+                              onClick={() => handleMoveToImport(selectedRoute, item.name, status)}
+                              disabled={actionInProgress !== null}
+                            >
+                              Import
+                            </button>
+                          )}
                           {status === 'failed' && (
                             <button
                               className="btn btn-primary"
@@ -489,32 +903,83 @@ export default function Storage() {
       )
     }
 
-    return (
-      <div>
-        <div className="card">
-          <div className="card-header">
-            <h2 className="card-title">Route: {selectedRoute}</h2>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button className="btn btn-secondary" onClick={() => refetchRoute()}>
-                Refresh
-              </button>
-              <button className="btn btn-secondary" onClick={() => setSelectedRoute(null)}>
-                Back to Overview
-              </button>
+    const renderLogsDirectory = (dir: DirectoryListing) => {
+      if (!dir.exists) return null
+
+      // Show all items (files AND directories) for logs
+      const allItems = dir.items
+
+      return (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <h3 style={{ color: 'var(--text-light)', margin: '0 0 0.5rem 0' }}>
+            Logs ({dir.itemCount})
+          </h3>
+          {allItems.length > 0 ? (
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                    <th>Modified</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allItems.map(item => (
+                    <tr key={item.name}>
+                      <td>
+                        <code style={{ fontSize: '0.75rem' }}>
+                          {item.name.length > 50 ? item.name.substring(0, 50) + '...' : item.name}
+                        </code>
+                      </td>
+                      <td>{item.isDirectory ? 'Directory' : 'File'}</td>
+                      <td>{item.isDirectory ? `${item.fileCount || 0} files` : item.sizeFormatted}</td>
+                      <td>{item.modified}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </div>
-
-          <div style={{ marginBottom: '1.5rem', fontSize: '0.875rem', color: 'var(--text-light)' }}>
-            Path: {routeDetail.path}
-          </div>
-
-          {renderDirectory('incoming', routeDetail.incoming, 'incoming')}
-          {renderDirectory('processing', routeDetail.processing, 'processing')}
-          {renderDirectory('completed', routeDetail.completed, 'completed')}
-          {renderDirectory('failed', routeDetail.failed, 'failed')}
-          {renderDirectory('logs', routeDetail.logs, 'logs')}
+          ) : (
+            <div style={{ color: 'var(--text-light)', fontStyle: 'italic' }}>No logs</div>
+          )}
         </div>
-      </div>
+      )
+    }
+
+    return (
+      <>
+        <div>
+          <div className="card">
+            <div className="card-header">
+              <h2 className="card-title">Route: {selectedRoute}</h2>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button className="btn btn-primary" onClick={() => openUploadModal(selectedRoute)}>
+                  Upload Data
+                </button>
+                <button className="btn btn-secondary" onClick={() => refetchRoute()}>
+                  Refresh
+                </button>
+                <button className="btn btn-secondary" onClick={() => setSelectedRoute(null)}>
+                  Back to Overview
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '1.5rem', fontSize: '0.875rem', color: 'var(--text-light)' }}>
+              Path: {routeDetail.path}
+            </div>
+
+            {renderDirectory('incoming', routeDetail.incoming, 'incoming')}
+            {renderDirectory('processing', routeDetail.processing, 'processing')}
+            {renderDirectory('completed', routeDetail.completed, 'completed')}
+            {renderDirectory('failed', routeDetail.failed, 'failed')}
+            {renderLogsDirectory(routeDetail.logs)}
+          </div>
+        </div>
+        {renderUploadModal()}
+      </>
     )
   }
 
@@ -590,12 +1055,22 @@ export default function Storage() {
                   </td>
                   <td>{route.totalSize}</td>
                   <td>
-                    <button
-                      className="btn btn-secondary"
-                      onClick={() => setSelectedRoute(route.name)}
-                    >
-                      View Details
-                    </button>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        className="btn btn-primary"
+                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
+                        onClick={() => openUploadModal(route.name)}
+                      >
+                        Upload
+                      </button>
+                      <button
+                        className="btn btn-secondary"
+                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
+                        onClick={() => setSelectedRoute(route.name)}
+                      >
+                        Details
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -610,6 +1085,7 @@ export default function Storage() {
           </table>
         </div>
       </div>
+      {renderUploadModal()}
     </div>
   )
 }

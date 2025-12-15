@@ -526,11 +526,62 @@ public class DicomRouter implements Callable<Integer> {
                 return study.getStudyUid();
             }
 
-            // Simple pattern replacement
-            return pattern
-                    .replace("{StudyUID}", study.getStudyUid())
-                    .replace("{StudyDate}", LocalDate.now().toString())
-                    .replace("{CallingAE}", study.getCallingAeTitle());
+            // Get DICOM attributes for pattern expansion
+            org.dcm4che3.data.Attributes attrs = readFirstDicomAttributes(study);
+
+            // Pattern replacement with actual DICOM values
+            String result = pattern;
+
+            // Study level UIDs and metadata (always available)
+            result = result.replace("{StudyInstanceUID}", study.getStudyUid());
+            result = result.replace("{StudyUID}", study.getStudyUid());  // Alias
+            result = result.replace("{CallingAE}", study.getCallingAeTitle());
+
+            // DICOM attributes (from actual file data)
+            if (attrs != null) {
+                result = replaceDicomTag(result, "{PatientID}", attrs, org.dcm4che3.data.Tag.PatientID);
+                result = replaceDicomTag(result, "{PatientName}", attrs, org.dcm4che3.data.Tag.PatientName);
+                result = replaceDicomTag(result, "{StudyDate}", attrs, org.dcm4che3.data.Tag.StudyDate);
+                result = replaceDicomTag(result, "{StudyTime}", attrs, org.dcm4che3.data.Tag.StudyTime);
+                result = replaceDicomTag(result, "{Modality}", attrs, org.dcm4che3.data.Tag.Modality);
+                result = replaceDicomTag(result, "{AccessionNumber}", attrs, org.dcm4che3.data.Tag.AccessionNumber);
+                result = replaceDicomTag(result, "{StudyDescription}", attrs, org.dcm4che3.data.Tag.StudyDescription);
+            }
+
+            // Sanitize result for filesystem (remove any remaining unresolved placeholders and invalid chars)
+            result = result.replaceAll("\\{[^}]+\\}", "UNKNOWN");
+            result = result.replaceAll("[^a-zA-Z0-9_/.-]", "_");
+
+            return result;
+        }
+
+        private String replaceDicomTag(String pattern, String placeholder, org.dcm4che3.data.Attributes attrs, int tag) {
+            if (!pattern.contains(placeholder)) {
+                return pattern;
+            }
+            String value = attrs.getString(tag);
+            if (value == null || value.isEmpty()) {
+                value = "UNKNOWN";
+            }
+            // Sanitize for filesystem
+            value = value.replaceAll("[^a-zA-Z0-9_-]", "_");
+            return pattern.replace(placeholder, value);
+        }
+
+        private org.dcm4che3.data.Attributes readFirstDicomAttributes(DicomReceiver.ReceivedStudy study) {
+            try {
+                List<File> files = study.getFiles();
+                if (files == null || files.isEmpty()) {
+                    return null;
+                }
+                File firstFile = files.get(0);
+                try (org.dcm4che3.io.DicomInputStream dis = new org.dcm4che3.io.DicomInputStream(firstFile)) {
+                    return dis.readDataset();
+                }
+            } catch (Exception e) {
+                log.warn("Failed to read DICOM attributes for pattern expansion: {}", e.getMessage());
+                return null;
+            }
         }
 
         private void moveStudyToCompleted(DicomReceiver.ReceivedStudy study, AppConfig.RouteConfig route) {

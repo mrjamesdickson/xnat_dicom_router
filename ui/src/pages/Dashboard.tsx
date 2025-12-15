@@ -21,9 +21,36 @@ interface HealthData {
   destinationsAvailable: string
 }
 
+interface ActiveTransfer {
+  transferId: string
+  aeTitle: string
+  studyUid: string
+  fileCount: number
+  totalSize: number
+  status: string
+  receivedAt: string
+  filesProcessed: number
+  bytesProcessed: number
+  progressPercent: number
+}
+
+interface ActiveTransfersData {
+  transfers: ActiveTransfer[]
+  count: number
+}
+
 export default function Dashboard() {
   const { data: status, loading: statusLoading, error: statusError } = useFetch<StatusData>('/status', 30000)
   const { data: health, loading: healthLoading, error: healthError } = useFetch<HealthData>('/status/health', 10000)
+  // Poll active transfers more frequently (every 2 seconds) for live progress
+  const { data: activeTransfers } = useFetch<ActiveTransfersData>('/transfers/active', 2000)
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B'
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
+  }
 
   if (statusLoading || healthLoading) {
     return (
@@ -142,6 +169,79 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Active Transfers with Live Progress */}
+      {activeTransfers && activeTransfers.count > 0 && (
+        <div className="card" style={{ borderLeft: '4px solid var(--warning-color)' }}>
+          <div className="card-header">
+            <h2 className="card-title">Active Transfers ({activeTransfers.count})</h2>
+            <span style={{ color: 'var(--text-light)', fontSize: '0.875rem' }}>
+              Auto-refreshing every 2s
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {activeTransfers.transfers.map(t => (
+              <div
+                key={t.transferId}
+                style={{
+                  background: 'var(--bg-color)',
+                  borderRadius: '6px',
+                  padding: '1rem',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <div>
+                    <strong>{t.aeTitle}</strong>
+                    <span style={{ marginLeft: '0.5rem', color: 'var(--text-light)', fontSize: '0.875rem' }}>
+                      {t.status}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.875rem', color: 'var(--text-light)' }}>
+                    {t.filesProcessed} / {t.fileCount} files
+                    <span style={{ marginLeft: '0.5rem' }}>
+                      ({formatBytes(t.bytesProcessed)} / {formatBytes(t.totalSize)})
+                    </span>
+                  </div>
+                </div>
+                {/* Progress bar */}
+                <div style={{
+                  background: 'var(--border-color)',
+                  borderRadius: '4px',
+                  height: '24px',
+                  overflow: 'hidden',
+                  position: 'relative'
+                }}>
+                  <div style={{
+                    background: 'linear-gradient(90deg, var(--secondary-color), var(--success-color))',
+                    height: '100%',
+                    width: `${t.progressPercent}%`,
+                    transition: 'width 0.3s ease-in-out',
+                    borderRadius: '4px'
+                  }} />
+                  <div style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 600,
+                    fontSize: '0.875rem',
+                    color: t.progressPercent > 50 ? 'white' : 'var(--text-color)'
+                  }}>
+                    {t.progressPercent.toFixed(1)}%
+                  </div>
+                </div>
+                <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--text-light)' }}>
+                  <code style={{ fontSize: '0.75rem' }}>{t.studyUid.substring(0, 40)}...</code>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-header">

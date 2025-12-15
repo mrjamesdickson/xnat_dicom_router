@@ -16,6 +16,67 @@
   --bg-color: #f5f6fa;
   --card-bg: #ffffff;
   --border-color: #e1e4e8;
+  --header-bg: #2c3e50;
+  --header-text: #ffffff;
+  --input-bg: #ffffff;
+  --hover-bg: rgba(0, 0, 0, 0.02);
+}
+
+/* Dark Theme */
+[data-theme="dark"] {
+  --primary-color: #1a1a2e;
+  --primary-light: #16213e;
+  --secondary-color: #4a9eff;
+  --success-color: #2ecc71;
+  --warning-color: #f1c40f;
+  --danger-color: #e74c3c;
+  --text-color: #e0e0e0;
+  --text-light: #a0a0a0;
+  --bg-color: #0f0f23;
+  --card-bg: #1a1a2e;
+  --border-color: #2a2a4a;
+  --header-bg: #0f0f23;
+  --header-text: #e0e0e0;
+  --input-bg: #16213e;
+  --hover-bg: rgba(255, 255, 255, 0.05);
+}
+
+/* High Contrast Theme */
+[data-theme="high-contrast"] {
+  --primary-color: #000000;
+  --primary-light: #1a1a1a;
+  --secondary-color: #0066cc;
+  --success-color: #008000;
+  --warning-color: #cc8800;
+  --danger-color: #cc0000;
+  --text-color: #000000;
+  --text-light: #333333;
+  --bg-color: #ffffff;
+  --card-bg: #ffffff;
+  --border-color: #000000;
+  --header-bg: #000000;
+  --header-text: #ffffff;
+  --input-bg: #ffffff;
+  --hover-bg: #f0f0f0;
+}
+
+/* Ocean Theme */
+[data-theme="ocean"] {
+  --primary-color: #0a4d68;
+  --primary-light: #088395;
+  --secondary-color: #05bfdb;
+  --success-color: #00c897;
+  --warning-color: #ffc107;
+  --danger-color: #ff6b6b;
+  --text-color: #2d3436;
+  --text-light: #636e72;
+  --bg-color: #e8f4f8;
+  --card-bg: #ffffff;
+  --border-color: #b8d4e3;
+  --header-bg: #0a4d68;
+  --header-text: #ffffff;
+  --input-bg: #ffffff;
+  --hover-bg: rgba(5, 191, 219, 0.05);
 }
 
 body {
@@ -36,8 +97,8 @@ a:hover {
 
 /* Header */
 .header {
-  background-color: var(--primary-color);
-  color: white;
+  background-color: var(--header-bg);
+  color: var(--header-text);
   padding: 1rem 2rem;
   display: flex;
   justify-content: space-between;
@@ -55,7 +116,7 @@ a:hover {
 }
 
 .header-nav a {
-  color: white;
+  color: var(--header-text);
   opacity: 0.9;
 }
 
@@ -66,6 +127,52 @@ a:hover {
 
 .header-nav a.active {
   border-bottom: 2px solid white;
+}
+
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.header-user select {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.3);
+  color: var(--header-text);
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.header-user select option {
+  background: var(--card-bg);
+  color: var(--text-color);
+}
+
+.header-user button {
+  background: rgba(255,255,255,0.15);
+  border: none;
+  color: var(--header-text);
+  padding: 0.4rem 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.header-user button:hover {
+  background: rgba(255,255,255,0.25);
+}
+
+.header-user .about-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
 }
 
 /* Main Layout */
@@ -123,7 +230,7 @@ a:hover {
 .stat-value {
   font-size: 2rem;
   font-weight: 700;
-  color: var(--primary-color);
+  color: var(--text-color);
 }
 
 .stat-label {
@@ -173,7 +280,7 @@ th {
 }
 
 tr:hover {
-  background-color: rgba(0, 0, 0, 0.02);
+  background-color: var(--hover-bg);
 }
 
 /* Buttons */
@@ -375,6 +482,8 @@ tr:hover {
   border-radius: 6px;
   font-size: 0.9rem;
   font-family: inherit;
+  background-color: var(--input-bg);
+  color: var(--text-color);
 }
 
 .form-group input:focus,

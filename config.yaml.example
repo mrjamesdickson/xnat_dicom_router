@@ -37,18 +37,18 @@ destinations:
 # Receiver Settings
 # =============================================================================
 receiver:
-  base_dir: "/data"
-  storage_dir: "/data/incoming"
-  processed_dir: "/data/processed"
-  failed_dir: "/data/failed"
-  done_dir: "/data/done"
+  base_dir: "./data"
+  storage_dir: "./data/incoming"
+  processed_dir: "./data/processed"
+  failed_dir: "./data/failed"
+  done_dir: "./data/done"
 
 # =============================================================================
 # Resilience Settings
 # =============================================================================
 resilience:
   health_check_interval: 60
-  cache_dir: "/data/cache/pending"
+  cache_dir: "./data/cache/pending"
   max_retries: 10
   retry_delay: 300
   retention_days: 30

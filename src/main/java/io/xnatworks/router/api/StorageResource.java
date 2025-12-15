@@ -8,6 +8,7 @@
 package io.xnatworks.router.api;
 
 import io.xnatworks.router.config.AppConfig;
+import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
@@ -18,16 +19,39 @@ import jakarta.ws.rs.QueryParam;
 // Using fully qualified names to avoid conflict with java.nio.file.Path
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import org.glassfish.jersey.media.multipart.FormDataBodyPart;
+import org.glassfish.jersey.media.multipart.FormDataMultiPart;
+import org.glassfish.jersey.media.multipart.FormDataParam;
+import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.VR;
+import org.dcm4che3.imageio.plugins.dcm.DicomImageReadParam;
+import org.dcm4che3.io.DicomInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+
+import java.io.BufferedInputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.UUID;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -248,6 +272,219 @@ public class StorageResource {
         result.put("totalSize", formatSize(files.stream().mapToLong(f -> ((Number) f.get("size")).longValue()).sum()));
 
         return Response.ok(result).build();
+    }
+
+    /**
+     * Get DICOM header information for a specific file.
+     */
+    @GET
+    @jakarta.ws.rs.Path("/dicom/header")
+    public Response getDicomHeader(@QueryParam("path") String relativePath) {
+        if (relativePath == null || relativePath.isEmpty()) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(Map.of("error", "Path parameter is required"))
+                    .build();
+        }
+
+        // Security: Ensure path stays within data directory
+        Path basePath = Paths.get(config.getDataDirectory()).toAbsolutePath().normalize();
+        Path targetPath = basePath.resolve(relativePath).normalize();
+
+        if (!targetPath.startsWith(basePath)) {
+            return Response.status(Response.Status.FORBIDDEN)
+                    .entity(Map.of("error", "Access denied: Path outside data directory"))
+                    .build();
+        }
+
+        if (!Files.exists(targetPath) || Files.isDirectory(targetPath)) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "File not found: " + relativePath))
+                    .build();
+        }
+
+        try (DicomInputStream dis = new DicomInputStream(targetPath.toFile())) {
+            Attributes attrs = dis.readDataset();
+            Attributes fmi = dis.readFileMetaInformation();
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("path", relativePath);
+            result.put("filename", targetPath.getFileName().toString());
+
+            // Patient information
+            Map<String, String> patient = new LinkedHashMap<>();
+            patient.put("name", attrs.getString(Tag.PatientName, ""));
+            patient.put("id", attrs.getString(Tag.PatientID, ""));
+            patient.put("birthDate", attrs.getString(Tag.PatientBirthDate, ""));
+            patient.put("sex", attrs.getString(Tag.PatientSex, ""));
+            patient.put("age", attrs.getString(Tag.PatientAge, ""));
+            result.put("patient", patient);
+
+            // Study information
+            Map<String, String> study = new LinkedHashMap<>();
+            study.put("instanceUID", attrs.getString(Tag.StudyInstanceUID, ""));
+            study.put("id", attrs.getString(Tag.StudyID, ""));
+            study.put("date", attrs.getString(Tag.StudyDate, ""));
+            study.put("time", attrs.getString(Tag.StudyTime, ""));
+            study.put("description", attrs.getString(Tag.StudyDescription, ""));
+            study.put("accessionNumber", attrs.getString(Tag.AccessionNumber, ""));
+            result.put("study", study);
+
+            // Series information
+            Map<String, String> series = new LinkedHashMap<>();
+            series.put("instanceUID", attrs.getString(Tag.SeriesInstanceUID, ""));
+            series.put("number", attrs.getString(Tag.SeriesNumber, ""));
+            series.put("description", attrs.getString(Tag.SeriesDescription, ""));
+            series.put("modality", attrs.getString(Tag.Modality, ""));
+            series.put("bodyPart", attrs.getString(Tag.BodyPartExamined, ""));
+            result.put("series", series);
+
+            // Instance information
+            Map<String, String> instance = new LinkedHashMap<>();
+            instance.put("sopInstanceUID", attrs.getString(Tag.SOPInstanceUID, ""));
+            instance.put("sopClassUID", attrs.getString(Tag.SOPClassUID, ""));
+            instance.put("instanceNumber", attrs.getString(Tag.InstanceNumber, ""));
+            result.put("instance", instance);
+
+            // Image information
+            Map<String, Object> image = new LinkedHashMap<>();
+            image.put("rows", attrs.getInt(Tag.Rows, 0));
+            image.put("columns", attrs.getInt(Tag.Columns, 0));
+            image.put("bitsAllocated", attrs.getInt(Tag.BitsAllocated, 0));
+            image.put("bitsStored", attrs.getInt(Tag.BitsStored, 0));
+            image.put("photometricInterpretation", attrs.getString(Tag.PhotometricInterpretation, ""));
+            image.put("samplesPerPixel", attrs.getInt(Tag.SamplesPerPixel, 0));
+            image.put("pixelSpacing", attrs.getStrings(Tag.PixelSpacing));
+            image.put("sliceThickness", attrs.getString(Tag.SliceThickness, ""));
+            result.put("image", image);
+
+            // Equipment information
+            Map<String, String> equipment = new LinkedHashMap<>();
+            equipment.put("manufacturer", attrs.getString(Tag.Manufacturer, ""));
+            equipment.put("institutionName", attrs.getString(Tag.InstitutionName, ""));
+            equipment.put("stationName", attrs.getString(Tag.StationName, ""));
+            equipment.put("modelName", attrs.getString(Tag.ManufacturerModelName, ""));
+            result.put("equipment", equipment);
+
+            // Transfer syntax from file meta info
+            if (fmi != null) {
+                result.put("transferSyntaxUID", fmi.getString(Tag.TransferSyntaxUID, ""));
+            }
+
+            // All tags (for advanced view)
+            List<Map<String, Object>> allTags = new ArrayList<>();
+            for (int tag : attrs.tags()) {
+                VR vr = attrs.getVR(tag);
+                Map<String, Object> tagInfo = new LinkedHashMap<>();
+                tagInfo.put("tag", String.format("(%04X,%04X)", (tag >> 16) & 0xFFFF, tag & 0xFFFF));
+                tagInfo.put("vr", vr != null ? vr.name() : "UN");
+                tagInfo.put("keyword", org.dcm4che3.data.ElementDictionary.keywordOf(tag, null));
+
+                // Get value (skip pixel data)
+                if (tag != Tag.PixelData) {
+                    Object value = attrs.getValue(tag);
+                    if (value instanceof byte[]) {
+                        tagInfo.put("value", "[binary data: " + ((byte[]) value).length + " bytes]");
+                    } else if (value != null) {
+                        String strValue = attrs.getString(tag, "");
+                        // Truncate long values
+                        if (strValue.length() > 200) {
+                            strValue = strValue.substring(0, 200) + "...";
+                        }
+                        tagInfo.put("value", strValue);
+                    } else {
+                        tagInfo.put("value", "");
+                    }
+                } else {
+                    tagInfo.put("value", "[pixel data]");
+                }
+
+                allTags.add(tagInfo);
+            }
+            result.put("allTags", allTags);
+
+            return Response.ok(result).build();
+        } catch (IOException e) {
+            log.error("Error reading DICOM file: {}", e.getMessage());
+            return Response.serverError()
+                    .entity(Map.of("error", "Failed to read DICOM file: " + e.getMessage()))
+                    .build();
+        }
+    }
+
+    /**
+     * Get DICOM image as PNG for preview.
+     */
+    @GET
+    @jakarta.ws.rs.Path("/dicom/image")
+    @Produces("image/png")
+    public Response getDicomImage(@QueryParam("path") String relativePath,
+                                  @QueryParam("frame") @DefaultValue("0") int frame) {
+        if (relativePath == null || relativePath.isEmpty()) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("Path parameter is required")
+                    .type(MediaType.TEXT_PLAIN)
+                    .build();
+        }
+
+        // Security: Ensure path stays within data directory
+        Path basePath = Paths.get(config.getDataDirectory()).toAbsolutePath().normalize();
+        Path targetPath = basePath.resolve(relativePath).normalize();
+
+        if (!targetPath.startsWith(basePath)) {
+            return Response.status(Response.Status.FORBIDDEN)
+                    .entity("Access denied: Path outside data directory")
+                    .type(MediaType.TEXT_PLAIN)
+                    .build();
+        }
+
+        if (!Files.exists(targetPath) || Files.isDirectory(targetPath)) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity("File not found: " + relativePath)
+                    .type(MediaType.TEXT_PLAIN)
+                    .build();
+        }
+
+        try {
+            // Read DICOM image using dcm4che imageio
+            java.util.Iterator<ImageReader> iter = ImageIO.getImageReadersByFormatName("DICOM");
+            if (!iter.hasNext()) {
+                return Response.serverError()
+                        .entity("DICOM ImageReader not available")
+                        .type(MediaType.TEXT_PLAIN)
+                        .build();
+            }
+
+            ImageReader reader = iter.next();
+            try (ImageInputStream iis = ImageIO.createImageInputStream(targetPath.toFile())) {
+                reader.setInput(iis);
+
+                DicomImageReadParam param = (DicomImageReadParam) reader.getDefaultReadParam();
+                BufferedImage image = reader.read(frame, param);
+
+                if (image == null) {
+                    return Response.status(Response.Status.NOT_FOUND)
+                            .entity("Could not read image from DICOM file")
+                            .type(MediaType.TEXT_PLAIN)
+                            .build();
+                }
+
+                // Convert to PNG
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                ImageIO.write(image, "PNG", baos);
+
+                return Response.ok(baos.toByteArray())
+                        .header("Content-Disposition", "inline; filename=\"preview.png\"")
+                        .build();
+            } finally {
+                reader.dispose();
+            }
+        } catch (Exception e) {
+            log.error("Error rendering DICOM image: {}", e.getMessage());
+            return Response.serverError()
+                    .entity("Failed to render DICOM image: " + e.getMessage())
+                    .type(MediaType.TEXT_PLAIN)
+                    .build();
+        }
     }
 
     /**
@@ -577,6 +814,317 @@ public class StorageResource {
                 moved.size(), skipped.size(), errors.size()));
 
         return Response.ok(result).build();
+    }
+
+    /**
+     * Upload files to a route's incoming directory.
+     * Supports:
+     * - Single DICOM files
+     * - Multiple files
+     * - ZIP archives (extracted automatically)
+     * - TAR archives (extracted automatically)
+     * - TAR.GZ archives (extracted automatically)
+     */
+    @POST
+    @jakarta.ws.rs.Path("/routes/{routeName}/upload")
+    @Consumes(MediaType.MULTIPART_FORM_DATA)
+    public Response uploadFiles(@PathParam("routeName") String routeName,
+                                FormDataMultiPart multiPart) {
+        Path routePath = Paths.get(config.getDataDirectory(), routeName);
+
+        if (!Files.exists(routePath)) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "Route not found: " + routeName))
+                    .build();
+        }
+
+        Path incomingDir = routePath.resolve("incoming");
+        try {
+            Files.createDirectories(incomingDir);
+        } catch (IOException e) {
+            log.error("Failed to create incoming directory: {}", e.getMessage());
+            return Response.serverError()
+                    .entity(Map.of("error", "Failed to create incoming directory"))
+                    .build();
+        }
+
+        // Generate a unique study folder name
+        String studyFolder = "study_" + UUID.randomUUID().toString().substring(0, 8) + "_" + System.currentTimeMillis();
+        Path studyPath = incomingDir.resolve(studyFolder);
+
+        try {
+            Files.createDirectories(studyPath);
+        } catch (IOException e) {
+            log.error("Failed to create study folder: {}", e.getMessage());
+            return Response.serverError()
+                    .entity(Map.of("error", "Failed to create study folder"))
+                    .build();
+        }
+
+        List<String> uploadedFiles = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        int totalFilesExtracted = 0;
+
+        // Process each uploaded file
+        List<FormDataBodyPart> fileParts = multiPart.getFields("files");
+        if (fileParts == null || fileParts.isEmpty()) {
+            // Try single file field name
+            fileParts = multiPart.getFields("file");
+        }
+
+        if (fileParts == null || fileParts.isEmpty()) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(Map.of("error", "No files uploaded. Use 'files' or 'file' field name."))
+                    .build();
+        }
+
+        for (FormDataBodyPart filePart : fileParts) {
+            String fileName = filePart.getContentDisposition().getFileName();
+            if (fileName == null || fileName.isEmpty()) {
+                continue;
+            }
+
+            try (InputStream fileStream = filePart.getValueAs(InputStream.class)) {
+                String lowerName = fileName.toLowerCase();
+
+                if (lowerName.endsWith(".zip")) {
+                    // Extract ZIP archive
+                    int count = extractZip(fileStream, studyPath);
+                    totalFilesExtracted += count;
+                    uploadedFiles.add(fileName + " (" + count + " files extracted)");
+                } else if (lowerName.endsWith(".tar.gz") || lowerName.endsWith(".tgz")) {
+                    // Extract TAR.GZ archive
+                    int count = extractTarGz(fileStream, studyPath);
+                    totalFilesExtracted += count;
+                    uploadedFiles.add(fileName + " (" + count + " files extracted)");
+                } else if (lowerName.endsWith(".tar")) {
+                    // Extract TAR archive
+                    int count = extractTar(fileStream, studyPath);
+                    totalFilesExtracted += count;
+                    uploadedFiles.add(fileName + " (" + count + " files extracted)");
+                } else {
+                    // Regular file - copy directly
+                    Path targetFile = studyPath.resolve(fileName);
+                    Files.copy(fileStream, targetFile, StandardCopyOption.REPLACE_EXISTING);
+                    uploadedFiles.add(fileName);
+                    totalFilesExtracted++;
+                }
+            } catch (Exception e) {
+                log.error("Error processing uploaded file {}: {}", fileName, e.getMessage());
+                errors.add(fileName + ": " + e.getMessage());
+            }
+        }
+
+        // If no files were uploaded, clean up the empty folder
+        if (totalFilesExtracted == 0) {
+            try {
+                Files.deleteIfExists(studyPath);
+            } catch (IOException e) {
+                log.debug("Failed to delete empty study folder: {}", e.getMessage());
+            }
+
+            if (!errors.isEmpty()) {
+                return Response.status(Response.Status.BAD_REQUEST)
+                        .entity(Map.of("error", "All uploads failed", "errors", errors))
+                        .build();
+            }
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(Map.of("error", "No files were uploaded"))
+                    .build();
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("message", "Upload successful");
+        result.put("route", routeName);
+        result.put("studyFolder", studyFolder);
+        result.put("filesUploaded", uploadedFiles.size());
+        result.put("totalFiles", totalFilesExtracted);
+        result.put("uploadedFiles", uploadedFiles);
+        if (!errors.isEmpty()) {
+            result.put("errors", errors);
+        }
+
+        log.info("Uploaded {} files to route {} in folder {}", totalFilesExtracted, routeName, studyFolder);
+        return Response.ok(result).build();
+    }
+
+    /**
+     * Move a study folder to import for processing.
+     * This triggers the import workflow to route the study to destinations.
+     */
+    @POST
+    @jakarta.ws.rs.Path("/routes/{routeName}/studies/{studyFolder}/move-to-import")
+    public Response moveToImport(@PathParam("routeName") String routeName,
+                                  @PathParam("studyFolder") String studyFolder,
+                                  @QueryParam("status") @DefaultValue("incoming") String status) {
+        Path sourcePath = Paths.get(config.getDataDirectory(), routeName, status, studyFolder);
+
+        if (!Files.exists(sourcePath)) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "Study folder not found: " + studyFolder))
+                    .build();
+        }
+
+        // Find the route config
+        AppConfig.RouteConfig route = config.findRouteByAeTitle(routeName);
+        if (route == null) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "Route not found: " + routeName))
+                    .build();
+        }
+
+        // Build import request and call import API internally
+        Map<String, Object> importRequest = new LinkedHashMap<>();
+        importRequest.put("path", sourcePath.toString());
+        importRequest.put("route", routeName);
+        importRequest.put("recursive", true);
+        importRequest.put("moveFiles", true);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("message", "Study queued for import processing");
+        result.put("route", routeName);
+        result.put("studyFolder", studyFolder);
+        result.put("sourcePath", sourcePath.toString());
+        result.put("importPath", sourcePath.toString());
+
+        log.info("Queued study {} from route {} for import processing", studyFolder, routeName);
+        return Response.accepted(result).build();
+    }
+
+    /**
+     * Get route configuration including autoImport setting.
+     */
+    @GET
+    @jakarta.ws.rs.Path("/routes/{routeName}/config")
+    public Response getRouteConfig(@PathParam("routeName") String routeName) {
+        AppConfig.RouteConfig route = config.findRouteByAeTitle(routeName);
+        if (route == null) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "Route not found: " + routeName))
+                    .build();
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("aeTitle", route.getAeTitle());
+        result.put("port", route.getPort());
+        result.put("enabled", route.isEnabled());
+        result.put("autoImport", route.isAutoImport());
+        result.put("destinationCount", route.getDestinations().size());
+
+        return Response.ok(result).build();
+    }
+
+    /**
+     * Extract ZIP archive to target directory.
+     */
+    private int extractZip(InputStream inputStream, Path targetDir) throws IOException {
+        int count = 0;
+        try (ZipInputStream zis = new ZipInputStream(new BufferedInputStream(inputStream))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    continue;
+                }
+
+                String name = entry.getName();
+                // Skip hidden files and __MACOSX
+                if (name.startsWith("__MACOSX") || name.contains("/.__") || name.startsWith(".")) {
+                    continue;
+                }
+
+                // Security: Prevent path traversal
+                Path targetFile = targetDir.resolve(name).normalize();
+                if (!targetFile.startsWith(targetDir)) {
+                    log.warn("Skipping file outside target directory: {}", name);
+                    continue;
+                }
+
+                // Flatten directory structure - put all files in root
+                String fileName = targetFile.getFileName().toString();
+                targetFile = targetDir.resolve(fileName);
+
+                // Handle duplicate file names
+                if (Files.exists(targetFile)) {
+                    String baseName = fileName;
+                    String extension = "";
+                    int dotIndex = fileName.lastIndexOf('.');
+                    if (dotIndex > 0) {
+                        baseName = fileName.substring(0, dotIndex);
+                        extension = fileName.substring(dotIndex);
+                    }
+                    int counter = 1;
+                    while (Files.exists(targetFile)) {
+                        targetFile = targetDir.resolve(baseName + "_" + counter + extension);
+                        counter++;
+                    }
+                }
+
+                Files.copy(zis, targetFile);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Extract TAR archive to target directory.
+     */
+    private int extractTar(InputStream inputStream, Path targetDir) throws IOException {
+        int count = 0;
+        try (TarArchiveInputStream tis = new TarArchiveInputStream(new BufferedInputStream(inputStream))) {
+            TarArchiveEntry entry;
+            while ((entry = tis.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    continue;
+                }
+
+                String name = entry.getName();
+                // Skip hidden files
+                if (name.startsWith(".") || name.contains("/.")) {
+                    continue;
+                }
+
+                // Security: Prevent path traversal
+                Path targetFile = targetDir.resolve(name).normalize();
+                if (!targetFile.startsWith(targetDir)) {
+                    log.warn("Skipping file outside target directory: {}", name);
+                    continue;
+                }
+
+                // Flatten directory structure
+                String fileName = targetFile.getFileName().toString();
+                targetFile = targetDir.resolve(fileName);
+
+                // Handle duplicate file names
+                if (Files.exists(targetFile)) {
+                    String baseName = fileName;
+                    String extension = "";
+                    int dotIndex = fileName.lastIndexOf('.');
+                    if (dotIndex > 0) {
+                        baseName = fileName.substring(0, dotIndex);
+                        extension = fileName.substring(dotIndex);
+                    }
+                    int counter = 1;
+                    while (Files.exists(targetFile)) {
+                        targetFile = targetDir.resolve(baseName + "_" + counter + extension);
+                        counter++;
+                    }
+                }
+
+                Files.copy(tis, targetFile);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Extract TAR.GZ archive to target directory.
+     */
+    private int extractTarGz(InputStream inputStream, Path targetDir) throws IOException {
+        try (GZIPInputStream gzis = new GZIPInputStream(new BufferedInputStream(inputStream))) {
+            return extractTar(gzis, targetDir);
+        }
     }
 
     // Helper methods

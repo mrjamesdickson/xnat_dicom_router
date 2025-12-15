@@ -94,6 +94,8 @@ public class AdminServer {
         final HonestBrokerService honestBrokerService = new HonestBrokerService(config);
         final HonestBrokersResource honestBrokersResource = new HonestBrokersResource(config, honestBrokerService);
         final ImportResource importResource = new ImportResource(config, destinationManager, transferTracker, scriptLibrary, honestBrokerService);
+        final OcrResource ocrResource = new OcrResource(config);
+        final QueryRetrieveResource queryRetrieveResource = new QueryRetrieveResource(config, destinationManager, transferTracker);
         final AuthFilter authFilter = new AuthFilter(config);
 
         ResourceConfig resourceConfig = new ResourceConfig();
@@ -113,6 +115,8 @@ public class AdminServer {
                 bind(logsResource).to(LogsResource.class);
                 bind(honestBrokersResource).to(HonestBrokersResource.class);
                 bind(importResource).to(ImportResource.class);
+                bind(ocrResource).to(OcrResource.class);
+                bind(queryRetrieveResource).to(QueryRetrieveResource.class);
             }
         });
 
@@ -128,12 +132,17 @@ public class AdminServer {
         resourceConfig.register(LogsResource.class);
         resourceConfig.register(HonestBrokersResource.class);
         resourceConfig.register(ImportResource.class);
+        resourceConfig.register(OcrResource.class);
+        resourceConfig.register(QueryRetrieveResource.class);
 
         // Register auth filter
         resourceConfig.register(authFilter);
 
         // Enable JSON
         resourceConfig.register(org.glassfish.jersey.jackson.JacksonFeature.class);
+
+        // Enable multipart file uploads
+        resourceConfig.register(org.glassfish.jersey.media.multipart.MultiPartFeature.class);
 
         // CORS filter
         resourceConfig.register(CorsFilter.class);
@@ -154,12 +163,18 @@ public class AdminServer {
                 context.setBaseResource(Resource.newResource(adminUrl));
                 context.setWelcomeFiles(new String[]{"index.html"});
 
-                // Default servlet for static files - map to all non-API paths
+                // Default servlet for static files (js, css, images, etc.)
                 ServletHolder defaultHolder = new ServletHolder("default", DefaultServlet.class);
                 defaultHolder.setInitParameter("dirAllowed", "false");
                 defaultHolder.setInitParameter("welcomeServlets", "false");
                 defaultHolder.setInitParameter("redirectWelcome", "false");
-                context.addServlet(defaultHolder, "/*");
+                context.addServlet(defaultHolder, "/assets/*");
+
+                // SPA fallback servlet - serves index.html for root and client-side routes
+                // This enables browser refresh and direct navigation to routes like /storage, /routes, etc.
+                ServletHolder spaHolder = new ServletHolder("spa-fallback", SpaFallbackServlet.class);
+                context.addServlet(spaHolder, "/");
+                context.addServlet(spaHolder, "/*");
 
                 log.info("Serving admin UI from classpath: {}", adminUrl);
             } else {

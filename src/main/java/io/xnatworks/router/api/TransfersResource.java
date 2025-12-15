@@ -232,6 +232,11 @@ public class TransfersResource {
         map.put("errorMessage", record.getErrorMessage());
         map.put("durationMs", record.getTotalDurationMs());
 
+        // Progress tracking
+        map.put("filesProcessed", record.getFilesProcessed());
+        map.put("bytesProcessed", record.getBytesProcessed());
+        map.put("progressPercent", record.getProgressPercent());
+
         // Destination results
         List<Map<String, Object>> destResults = new ArrayList<>();
         if (record.getDestinationResults() != null) {

@@ -7,10 +7,13 @@
  */
 package io.xnatworks.router.routing;
 
+import io.xnatworks.router.anon.AnonymizationService;
 import io.xnatworks.router.anon.ScriptLibrary;
 import io.xnatworks.router.config.AppConfig;
 import io.xnatworks.router.dicom.DicomClient;
 import io.xnatworks.router.dicom.DicomReceiver;
+import io.xnatworks.router.ocr.DicomOcrProcessor;
+import io.xnatworks.router.ocr.OcrService;
 import io.xnatworks.router.tracking.TransferTracker;
 import io.xnatworks.router.xnat.XnatClient;
 import org.dcm4che3.data.Attributes;
@@ -55,6 +58,9 @@ public class ForwardManager implements AutoCloseable {
     private final DestinationManager destinationManager;
     private final TransferTracker transferTracker;
     private final ScriptLibrary scriptLibrary;
+    private final AnonymizationService anonymizationService;
+    private final OcrService ocrService;
+    private final DicomOcrProcessor ocrProcessor;
 
     // Thread pools per route (keyed by AE Title)
     private final Map<String, ExecutorService> routeExecutors = new ConcurrentHashMap<>();
@@ -68,11 +74,24 @@ public class ForwardManager implements AutoCloseable {
     public ForwardManager(AppConfig config,
                           DestinationManager destinationManager,
                           TransferTracker transferTracker,
-                          ScriptLibrary scriptLibrary) {
+                          ScriptLibrary scriptLibrary,
+                          AnonymizationService anonymizationService,
+                          OcrService ocrService) {
         this.config = config;
         this.destinationManager = destinationManager;
         this.transferTracker = transferTracker;
         this.scriptLibrary = scriptLibrary;
+        this.anonymizationService = anonymizationService;
+        this.ocrService = ocrService;
+
+        // Initialize OCR processor if service is available
+        if (ocrService != null && ocrService.isAvailable()) {
+            this.ocrProcessor = new DicomOcrProcessor(ocrService, 2, 60.0f);
+            log.info("OCR processor initialized for pixel PHI detection");
+        } else {
+            this.ocrProcessor = null;
+            log.info("OCR service not available - pixel PHI detection disabled");
+        }
 
         this.retryScheduler = Executors.newScheduledThreadPool(2, r -> {
             Thread t = new Thread(r, "forward-retry-scheduler");
@@ -298,8 +317,20 @@ public class ForwardManager implements AutoCloseable {
 
         // Prepare files (with anonymization if needed)
         Path forwardDir = sourceDir;
+        Path anonDir = null;
+        Path ocrDir = null;
+
         if (routeDest.isAnonymize()) {
-            forwardDir = applyAnonymization(sourceDir, routeDest, route);
+            anonDir = applyAnonymization(sourceDir, routeDest, route);
+            forwardDir = anonDir;
+        }
+
+        // Apply OCR processing if enabled (after anonymization)
+        if (routeDest.isOcrEnabled()) {
+            ocrDir = applyOcrProcessing(forwardDir, routeDest, route);
+            if (ocrDir != null && !ocrDir.equals(forwardDir)) {
+                forwardDir = ocrDir;
+            }
         }
 
         // Get files to forward
@@ -439,7 +470,7 @@ public class ForwardManager implements AutoCloseable {
     }
 
     /**
-     * Apply anonymization using script from library.
+     * Apply anonymization using DicomEdit library directly (no ProcessBuilder).
      */
     private Path applyAnonymization(Path sourceDir, AppConfig.RouteDestination routeDest,
                                      AppConfig.RouteConfig route) throws Exception {
@@ -458,38 +489,120 @@ public class ForwardManager implements AutoCloseable {
         Path anonDir = sourceDir.getParent().resolve("anonymized_" + System.currentTimeMillis());
         Files.createDirectories(anonDir);
 
-        // Write script to temp file
-        Path scriptFile = Files.createTempFile("anon_script_", ".das");
-        Files.writeString(scriptFile, scriptContent);
+        // Use AnonymizationService to process files directly using DicomEdit library
+        log.info("Applying anonymization script '{}' to {} files", scriptName,
+                Files.list(sourceDir).filter(Files::isRegularFile).count());
 
-        try {
-            // Find DicomEdit JAR
-            Path dicomEditJar = findDicomEditJar();
-            if (dicomEditJar == null) {
-                throw new IOException("DicomEdit JAR not found");
-            }
+        AnonymizationService.AnonymizationResult result = anonymizationService.anonymizeWithScript(
+                sourceDir, anonDir, scriptContent);
 
-            // Run DicomEdit
-            ProcessBuilder pb = new ProcessBuilder(
-                    "java", "-jar", dicomEditJar.toString(),
-                    "-s", scriptFile.toString(),
-                    "-i", sourceDir.toString(),
-                    "-o", anonDir.toString()
-            );
-            pb.redirectErrorStream(true);
-
-            Process process = pb.start();
-            boolean completed = process.waitFor(5, TimeUnit.MINUTES);
-
-            if (!completed || process.exitValue() != 0) {
-                throw new IOException("DicomEdit failed");
-            }
-
-            return anonDir;
-
-        } finally {
-            Files.deleteIfExists(scriptFile);
+        if (!result.isSuccess()) {
+            log.warn("Anonymization completed with {} errors out of {} files",
+                    result.getErrorCount(), result.getInputFiles());
+        } else {
+            log.info("Anonymization successful: {} files processed in {}ms",
+                    result.getOutputFiles(), result.getDurationMs());
         }
+
+        return anonDir;
+    }
+
+    /**
+     * Apply OCR-based pixel PHI detection and optionally redact.
+     *
+     * @param sourceDir Directory containing DICOM files
+     * @param routeDest Route destination with OCR settings
+     * @param route The route configuration
+     * @return Path to OCR-processed files (may be same as source if no redaction)
+     */
+    private Path applyOcrProcessing(Path sourceDir, AppConfig.RouteDestination routeDest,
+                                     AppConfig.RouteConfig route) throws Exception {
+        if (ocrProcessor == null || !routeDest.isOcrEnabled()) {
+            return sourceDir;
+        }
+
+        String aeTitle = route.getAeTitle();
+        log.info("[{}] Starting OCR PHI scan for destination {}", aeTitle, routeDest.getDestination());
+
+        // Create output directory if redaction is enabled
+        Path outputDir = routeDest.isOcrRedact()
+                ? sourceDir.getParent().resolve("ocr_redacted_" + System.currentTimeMillis())
+                : null;
+
+        if (outputDir != null) {
+            Files.createDirectories(outputDir);
+        }
+
+        int phiFilesFound = 0;
+        int phiRegionsTotal = 0;
+        int filesProcessed = 0;
+
+        // Process each DICOM file
+        try (var stream = Files.list(sourceDir)) {
+            List<Path> dicomFiles = stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.toString().endsWith(".dcm") || !p.toString().contains("."))
+                    .collect(Collectors.toList());
+
+            for (Path dicomFile : dicomFiles) {
+                filesProcessed++;
+                try {
+                    DicomOcrProcessor.OcrResult result = ocrProcessor.processDicomFile(dicomFile.toFile());
+
+                    if (result.hasPhiDetected()) {
+                        phiFilesFound++;
+                        phiRegionsTotal += result.getPhiRegionCount();
+
+                        log.info("[{}] PHI detected in {}: {} regions",
+                                aeTitle, dicomFile.getFileName(), result.getPhiRegionCount());
+
+                        // Apply redaction if enabled
+                        if (routeDest.isOcrRedact() && outputDir != null) {
+                            Path outputFile = outputDir.resolve(dicomFile.getFileName());
+                            boolean redacted = ocrProcessor.applyRedaction(
+                                    dicomFile.toFile(),
+                                    outputFile.toFile(),
+                                    result.getDetectedRegions()
+                            );
+
+                            if (redacted) {
+                                log.debug("[{}] Redacted PHI in {}", aeTitle, dicomFile.getFileName());
+                            }
+                        } else {
+                            // Just log the detection, copy file as-is
+                            if (outputDir != null) {
+                                Files.copy(dicomFile, outputDir.resolve(dicomFile.getFileName()),
+                                        StandardCopyOption.REPLACE_EXISTING);
+                            }
+                        }
+                    } else {
+                        // No PHI found, copy file as-is if we have an output dir
+                        if (outputDir != null) {
+                            Files.copy(dicomFile, outputDir.resolve(dicomFile.getFileName()),
+                                    StandardCopyOption.REPLACE_EXISTING);
+                        }
+                    }
+
+                } catch (Exception e) {
+                    log.warn("[{}] OCR processing failed for {}: {}",
+                            aeTitle, dicomFile.getFileName(), e.getMessage());
+                    // Copy file as-is on error
+                    if (outputDir != null) {
+                        Files.copy(dicomFile, outputDir.resolve(dicomFile.getFileName()),
+                                StandardCopyOption.REPLACE_EXISTING);
+                    }
+                }
+            }
+        }
+
+        log.info("[{}] OCR scan complete: {} files scanned, {} with PHI ({} regions total)",
+                aeTitle, filesProcessed, phiFilesFound, phiRegionsTotal);
+
+        // Return appropriate directory
+        if (outputDir != null && routeDest.isOcrRedact()) {
+            return outputDir;
+        }
+        return sourceDir;
     }
 
     /**
@@ -1024,27 +1137,6 @@ public class ForwardManager implements AutoCloseable {
         }
 
         return zipFile;
-    }
-
-    private Path findDicomEditJar() {
-        String[] searchPaths = {"libs", "../lib", "."};
-        for (String basePath : searchPaths) {
-            try {
-                Path dir = Paths.get(basePath);
-                if (Files.isDirectory(dir)) {
-                    Optional<Path> found = Files.list(dir)
-                            .filter(p -> p.getFileName().toString().startsWith("dicom-edit"))
-                            .filter(p -> p.getFileName().toString().endsWith(".jar"))
-                            .findFirst();
-                    if (found.isPresent()) {
-                        return found.get().toAbsolutePath();
-                    }
-                }
-            } catch (IOException e) {
-                // Continue searching
-            }
-        }
-        return null;
     }
 
     private void deleteDirectory(Path dir) {

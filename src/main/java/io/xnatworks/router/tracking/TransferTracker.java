@@ -117,6 +117,30 @@ public class TransferTracker {
     }
 
     /**
+     * Update progress for a transfer (files/bytes processed).
+     */
+    public void updateProgress(String transferId, long filesProcessed, long bytesProcessed) {
+        TransferRecord record = activeTransfers.get(transferId);
+        if (record == null) {
+            return;
+        }
+        record.setFilesProcessed(filesProcessed);
+        record.setBytesProcessed(bytesProcessed);
+    }
+
+    /**
+     * Increment progress by one file.
+     */
+    public void incrementProgress(String transferId, long bytesForFile) {
+        TransferRecord record = activeTransfers.get(transferId);
+        if (record == null) {
+            return;
+        }
+        record.setFilesProcessed(record.getFilesProcessed() + 1);
+        record.setBytesProcessed(record.getBytesProcessed() + bytesForFile);
+    }
+
+    /**
      * Update transfer status to forwarding.
      */
     public void startForwarding(String transferId, List<String> destinations) {
@@ -591,6 +615,10 @@ public class TransferTracker {
         private LocalDateTime completedAt;
         private List<DestinationResult> destinationResults;
 
+        // Progress tracking
+        private long filesProcessed;
+        private long bytesProcessed;
+
         // Getters and setters
         public String getId() { return id; }
         public void setId(String id) { this.id = id; }
@@ -631,9 +659,26 @@ public class TransferTracker {
         public List<DestinationResult> getDestinationResults() { return destinationResults; }
         public void setDestinationResults(List<DestinationResult> destinationResults) { this.destinationResults = destinationResults; }
 
+        public long getFilesProcessed() { return filesProcessed; }
+        public void setFilesProcessed(long filesProcessed) { this.filesProcessed = filesProcessed; }
+
+        public long getBytesProcessed() { return bytesProcessed; }
+        public void setBytesProcessed(long bytesProcessed) { this.bytesProcessed = bytesProcessed; }
+
         public long getTotalDurationMs() {
             if (receivedAt == null || completedAt == null) return 0;
             return java.time.Duration.between(receivedAt, completedAt).toMillis();
+        }
+
+        /**
+         * Calculate progress percentage based on files processed.
+         * Returns value 0-100.
+         */
+        public double getProgressPercent() {
+            if (status == TransferStatus.COMPLETED) return 100.0;
+            if (status == TransferStatus.FAILED) return 0.0;
+            if (fileCount <= 0) return 0.0;
+            return Math.min(100.0, (filesProcessed * 100.0) / fileCount);
         }
     }
 

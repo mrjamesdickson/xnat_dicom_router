@@ -26,6 +26,32 @@
 - Log viewer
 - Settings management
 
+### Storage Page Features (Added 2024-12-13)
+- File upload via drag-and-drop (files and folders)
+- Archive extraction: ZIP, TAR, TAR.GZ
+- Multi-file upload support
+- "Move to Import" button for manual processing of uploaded studies
+- Logs directory display with files and directories
+
+### Theme Support (Added 2024-12-13)
+- Four built-in themes: Light, Dark, High Contrast, Ocean
+- Theme persisted to localStorage
+- CSS variables for consistent theming
+- Theme selector in header
+
+### Route Configuration (Added 2024-12-13)
+- `auto_import` option per route in config.yaml
+- When enabled, uploaded files automatically processed and routed
+- Example:
+  ```yaml
+  routes:
+    - ae_title: MY_ROUTE
+      port: 4104
+      auto_import: true
+      destinations:
+        - destination: xnat_server
+  ```
+
 ---
 
 ## Planned Features

@@ -293,8 +293,10 @@ public class DicomClient implements AutoCloseable {
         rq.setCallingAET(callingAeTitle);
         rq.addPresentationContext(new PresentationContext(1, sopClassUid, TRANSFER_SYNTAXES));
 
-        Association as = ae.connect(remoteConn, rq);
+        Association as = null;
         try {
+            as = ae.connect(remoteConn, rq);
+
             DimseRSPHandler rspHandler = new DimseRSPHandler(as.nextMessageID()) {
                 @Override
                 public void onDimseRSP(Association as, Attributes cmd, Attributes data) {
@@ -309,7 +311,13 @@ public class DicomClient implements AutoCloseable {
             as.waitForOutstandingRSP();
 
         } finally {
-            as.release();
+            if (as != null && as.isReadyForDataTransfer()) {
+                try {
+                    as.release();
+                } catch (Exception e) {
+                    log.debug("Error releasing association: {}", e.getMessage());
+                }
+            }
         }
 
         log.info("C-FIND to '{}': found {} results", destinationName, results.size());
@@ -330,8 +338,9 @@ public class DicomClient implements AutoCloseable {
         rq.setCallingAET(callingAeTitle);
         rq.addPresentationContext(new PresentationContext(1, sopClassUid, TRANSFER_SYNTAXES));
 
-        Association as = ae.connect(remoteConn, rq);
+        Association as = null;
         try {
+            as = ae.connect(remoteConn, rq);
             long startTime = System.currentTimeMillis();
 
             DimseRSPHandler rspHandler = new DimseRSPHandler(as.nextMessageID()) {
@@ -361,7 +370,13 @@ public class DicomClient implements AutoCloseable {
             result.setDurationMs(System.currentTimeMillis() - startTime);
 
         } finally {
-            as.release();
+            if (as != null && as.isReadyForDataTransfer()) {
+                try {
+                    as.release();
+                } catch (Exception e) {
+                    log.debug("Error releasing association: {}", e.getMessage());
+                }
+            }
         }
 
         log.info("C-MOVE from '{}' to '{}': {} completed, {} failed in {}ms",
@@ -396,10 +411,17 @@ public class DicomClient implements AutoCloseable {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+            executor = null;
         }
         if (scheduledExecutor != null) {
             scheduledExecutor.shutdown();
+            scheduledExecutor = null;
         }
+        // Reset all state so the client can be reinitialized
+        device = null;
+        ae = null;
+        conn = null;
+        remoteConn = null;
     }
 
     public String getDestinationName() { return destinationName; }

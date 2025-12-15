@@ -255,7 +255,7 @@ export default function Logs() {
         .logs-sidebar {
           width: 300px;
           flex-shrink: 0;
-          background: #f8f9fa;
+          background: var(--card-bg);
           border-radius: 8px;
           padding: 1rem;
           overflow-y: auto;
@@ -264,7 +264,7 @@ export default function Logs() {
         .logs-sidebar h3 {
           margin: 0 0 1rem 0;
           font-size: 1rem;
-          color: #333;
+          color: var(--text-color);
         }
 
         .log-route-section {
@@ -274,9 +274,9 @@ export default function Logs() {
         .log-route-section h4 {
           margin: 0 0 0.5rem 0;
           font-size: 0.9rem;
-          color: #666;
+          color: var(--text-light);
           padding: 0.25rem 0.5rem;
-          background: #e9ecef;
+          background: var(--bg-color);
           border-radius: 4px;
         }
 
@@ -297,11 +297,11 @@ export default function Logs() {
         }
 
         .log-file-list li:hover {
-          background: #e9ecef;
+          background: var(--hover-bg);
         }
 
         .log-file-list li.selected {
-          background: #007bff;
+          background: var(--secondary-color);
           color: white;
         }
 
@@ -321,7 +321,7 @@ export default function Logs() {
 
         .logs-content {
           flex: 1;
-          background: #f8f9fa;
+          background: var(--card-bg);
           border-radius: 8px;
           display: flex;
           flex-direction: column;
@@ -333,7 +333,7 @@ export default function Logs() {
           align-items: center;
           justify-content: center;
           height: 100%;
-          color: #666;
+          color: var(--text-light);
         }
 
         .log-header {
@@ -415,7 +415,7 @@ export default function Logs() {
         }
 
         .empty-message {
-          color: #666;
+          color: var(--text-light);
           font-style: italic;
         }
 
@@ -428,7 +428,7 @@ export default function Logs() {
         }
 
         .btn-primary {
-          background: #007bff;
+          background: var(--secondary-color);
           color: white;
         }
 
@@ -451,11 +451,11 @@ export default function Logs() {
           align-items: center;
           justify-content: center;
           padding: 2rem;
-          color: #666;
+          color: var(--text-light);
         }
 
         .error {
-          color: #dc3545;
+          color: var(--danger-color);
           padding: 1rem;
         }
       `}</style>
