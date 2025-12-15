@@ -125,7 +125,7 @@ export default function Dashboard() {
           </div>
           {status?.transfers.total && status.transfers.total > 0 && (
             <div style={{ marginTop: '1rem', textAlign: 'center', color: 'var(--text-light)' }}>
-              Success Rate: {status.transfers.successRate.toFixed(1)}%
+              Success Rate: {(status.transfers.successRate ?? 0).toFixed(1)}%
             </div>
           )}
         </div>
@@ -231,7 +231,7 @@ export default function Dashboard() {
                     fontSize: '0.875rem',
                     color: t.progressPercent > 50 ? 'white' : 'var(--text-color)'
                   }}>
-                    {t.progressPercent.toFixed(1)}%
+                    {(t.progressPercent ?? 0).toFixed(1)}%
                   </div>
                 </div>
                 <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--text-light)' }}>
@@ -262,7 +262,7 @@ export default function Dashboard() {
                 <tr key={dest.name}>
                   <td><strong>{dest.name}</strong></td>
                   <td>{dest.type}</td>
-                  <td>{dest.availabilityPercent.toFixed(1)}%</td>
+                  <td>{(dest.availabilityPercent ?? 0).toFixed(1)}%</td>
                   <td>
                     <span className={`status-badge status-${dest.available ? 'available' : 'unavailable'}`}>
                       {dest.available ? 'Available' : 'Unavailable'}

@@ -980,7 +980,7 @@ export default function QueryRetrieve() {
                           borderRadius: '4px',
                           fontSize: '0.85rem'
                         }}>
-                          Slice: {imageList[currentImageIndex].sliceLocation.toFixed(2)}mm
+                          Slice: {(imageList[currentImageIndex].sliceLocation ?? 0).toFixed(2)}mm
                         </div>
                       )}
                     </div>

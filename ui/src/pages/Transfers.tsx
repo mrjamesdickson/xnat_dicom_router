@@ -197,7 +197,7 @@ export default function Transfers() {
                           fontSize: '0.75rem',
                           color: t.progressPercent > 50 ? 'white' : 'var(--text-color)'
                         }}>
-                          {t.progressPercent.toFixed(1)}%
+                          {(t.progressPercent ?? 0).toFixed(1)}%
                         </div>
                       </div>
                     </td>

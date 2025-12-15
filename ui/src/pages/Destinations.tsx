@@ -396,7 +396,7 @@ export default function Destinations() {
                     {dest.type === 'dicom' && `${dest.aeTitle}@${dest.host}:${dest.port}`}
                     {dest.type === 'file' && dest.path}
                   </td>
-                  <td>{dest.availabilityPercent.toFixed(1)}%</td>
+                  <td>{(dest.availabilityPercent ?? 0).toFixed(1)}%</td>
                   <td>
                     <span className={`status-badge status-${dest.available ? 'available' : 'unavailable'}`}>
                       {dest.available ? 'Available' : 'Unavailable'}
@@ -459,7 +459,7 @@ export default function Destinations() {
               <h3 style={{ marginBottom: '1rem' }}>Health Statistics</h3>
               <div className="stat-grid">
                 <div className="stat-item">
-                  <div className="stat-value">{destDetail.health.availabilityPercent.toFixed(1)}%</div>
+                  <div className="stat-value">{(destDetail.health.availabilityPercent ?? 0).toFixed(1)}%</div>
                   <div className="stat-label">Availability</div>
                 </div>
                 <div className="stat-item">
