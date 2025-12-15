@@ -52,17 +52,14 @@ public class DicomReceiver implements AutoCloseable {
     private final Path failedDir;
     private final Path logsDir;
     private final Consumer<ReceivedStudy> onStudyComplete;
+    private final long studyTimeoutMs;
 
     private Device device;
     private ApplicationEntity ae;
     private Connection conn;
     private ExecutorService executor;
     private ScheduledExecutorService scheduledExecutor;
-
-    // Track current study for batching
-    private String currentStudyUid;
-    private long lastFileReceived;
-    private static final long STUDY_TIMEOUT_MS = 30000; // 30 seconds of inactivity = study complete
+    private FolderWatcher folderWatcher;
 
     // Statistics
     private long totalFilesReceived = 0;
@@ -75,14 +72,22 @@ public class DicomReceiver implements AutoCloseable {
      *
      * Directory structure:
      * {baseDir}/{aeTitle}/
-     *   ├── incoming/          # Raw received DICOM
-     *   │   └── study_{uid}/   # Files grouped by study
+     *   ├── incoming/                    # Raw received DICOM
+     *   │   └── {StudyInstanceUID}/      # Study folder
+     *   │       └── {SeriesInstanceUID}/ # Series folder
+     *   │           └── {SOPInstanceUID}.dcm
      *   ├── processing/        # Currently being processed
      *   ├── completed/         # Successfully forwarded
      *   ├── failed/            # Failed to forward
      *   └── logs/              # AE-specific logs
+     *
+     * @param aeTitle the AE title for this receiver
+     * @param port the port to listen on
+     * @param baseDir the base directory for storing files
+     * @param studyTimeoutSeconds seconds to wait after last file before considering study complete
+     * @param onStudyComplete callback when study is complete
      */
-    public DicomReceiver(String aeTitle, int port, String baseDir, Consumer<ReceivedStudy> onStudyComplete) {
+    public DicomReceiver(String aeTitle, int port, String baseDir, int studyTimeoutSeconds, Consumer<ReceivedStudy> onStudyComplete) {
         this.aeTitle = aeTitle;
         this.port = port;
         this.baseDir = Paths.get(baseDir, aeTitle);
@@ -91,14 +96,16 @@ public class DicomReceiver implements AutoCloseable {
         this.completedDir = this.baseDir.resolve("completed");
         this.failedDir = this.baseDir.resolve("failed");
         this.logsDir = this.baseDir.resolve("logs");
+        this.studyTimeoutMs = studyTimeoutSeconds * 1000L;
         this.onStudyComplete = onStudyComplete;
     }
 
     /**
      * Create receiver from route configuration.
+     * Uses studyTimeoutSeconds from route config (default 30 seconds).
      */
     public DicomReceiver(AppConfig.RouteConfig route, String baseDir, Consumer<ReceivedStudy> onStudyComplete) {
-        this(route.getAeTitle(), route.getPort(), baseDir, onStudyComplete);
+        this(route.getAeTitle(), route.getPort(), baseDir, route.getStudyTimeoutSeconds(), onStudyComplete);
     }
 
     /**
@@ -163,91 +170,33 @@ public class DicomReceiver implements AutoCloseable {
         log.info("DICOM receiver started: {} on port {}", aeTitle, port);
         logEvent("STARTED", "Receiver successfully started");
 
-        // Scan for existing studies in incoming directory and process them
-        scanAndProcessExistingStudies();
-    }
-
-    /**
-     * Scan the incoming directory for existing studies and process them.
-     * This handles studies that were received but not processed (e.g., after a restart).
-     */
-    private void scanAndProcessExistingStudies() {
-        if (!Files.exists(incomingDir)) {
-            return;
-        }
-
-        try (Stream<Path> studyDirs = Files.list(incomingDir)) {
-            List<Path> existingStudies = studyDirs
-                    .filter(Files::isDirectory)
-                    .filter(p -> p.getFileName().toString().startsWith("study_"))
-                    .collect(Collectors.toList());
-
-            if (existingStudies.isEmpty()) {
-                log.debug("[{}] No existing studies found in incoming directory", aeTitle);
-                return;
-            }
-
-            log.info("[{}] Found {} existing studies in incoming directory - processing...",
-                    aeTitle, existingStudies.size());
-            logEvent("STARTUP_SCAN", "Found " + existingStudies.size() + " existing studies to process");
-
-            for (Path studyPath : existingStudies) {
-                try {
-                    processExistingStudy(studyPath);
-                } catch (Exception e) {
-                    log.error("[{}] Error processing existing study {}: {}",
-                            aeTitle, studyPath.getFileName(), e.getMessage(), e);
-                    logEvent("ERROR", "Failed to process existing study " + studyPath.getFileName() + ": " + e.getMessage());
-                }
-            }
-
-            log.info("[{}] Finished processing existing studies", aeTitle);
+        // Start the folder watcher to detect study completion
+        // This handles both files received via DICOM and files copied to the folder
+        int studyTimeoutSeconds = (int) (studyTimeoutMs / 1000);
+        folderWatcher = new FolderWatcher(incomingDir, aeTitle, studyTimeoutSeconds, this::handleStudyComplete);
+        try {
+            folderWatcher.start();
         } catch (IOException e) {
-            log.error("[{}] Error scanning incoming directory: {}", aeTitle, e.getMessage(), e);
+            log.error("[{}] Failed to start folder watcher: {}", aeTitle, e.getMessage(), e);
+            logEvent("WARNING", "Folder watcher failed to start: " + e.getMessage());
         }
     }
 
     /**
-     * Process an existing study directory found during startup scan.
+     * Handle study completion from the FolderWatcher.
+     * Updates statistics and forwards to the callback.
      */
-    private void processExistingStudy(Path studyPath) throws IOException {
-        String studyDirName = studyPath.getFileName().toString();
-        String studyUid = studyDirName.startsWith("study_") ? studyDirName.substring(6) : studyDirName;
-
-        // Count files and calculate size
-        long fileCount;
-        long totalSize;
-        try (Stream<Path> files = Files.list(studyPath)) {
-            List<Path> fileList = files.filter(Files::isRegularFile).collect(Collectors.toList());
-            fileCount = fileList.size();
-            totalSize = fileList.stream().mapToLong(p -> {
-                try {
-                    return Files.size(p);
-                } catch (IOException e) {
-                    return 0;
-                }
-            }).sum();
-        }
-
-        if (fileCount == 0) {
-            log.debug("[{}] Skipping empty study directory: {}", aeTitle, studyDirName);
-            return;
-        }
-
-        log.info("[{}] Processing existing study: {} ({} files, {} bytes)",
-                aeTitle, studyUid, fileCount, totalSize);
-
-        // Create ReceivedStudy and trigger callback
-        ReceivedStudy study = new ReceivedStudy();
-        study.setStudyUid(studyUid);
-        study.setPath(studyPath);
-        study.setFileCount(fileCount);
-        study.setTotalSize(totalSize);
-        study.setAeTitle(aeTitle);
-        study.setCallingAeTitle("STARTUP_SCAN");
-        study.setReceivedAt(LocalDateTime.now());
-
+    private void handleStudyComplete(ReceivedStudy study) {
         totalStudiesReceived++;
+
+        log.info("[{}] Study complete: {} ({} files, {} bytes) from {}",
+                aeTitle, study.getStudyUid(), study.getFileCount(),
+                formatBytes(study.getTotalSize()), study.getCallingAeTitle());
+
+        logEvent("STUDY_COMPLETE", String.format(
+                "Study %s complete: %d files, %s from %s",
+                study.getStudyUid(), study.getFileCount(),
+                formatBytes(study.getTotalSize()), study.getCallingAeTitle()));
 
         if (onStudyComplete != null) {
             onStudyComplete.accept(study);
@@ -260,6 +209,11 @@ public class DicomReceiver implements AutoCloseable {
     public void stop() {
         log.info("Stopping DICOM receiver: {}", aeTitle);
         logEvent("SHUTDOWN", "Receiver stopping");
+
+        // Stop folder watcher first
+        if (folderWatcher != null) {
+            folderWatcher.stop();
+        }
 
         if (device != null) {
             device.unbindConnections();
@@ -315,14 +269,18 @@ public class DicomReceiver implements AutoCloseable {
                 if (studyUid == null) {
                     studyUid = "UNKNOWN_STUDY";
                 }
+                if (seriesUid == null) {
+                    seriesUid = "UNKNOWN_SERIES";
+                }
 
-                // Store the file in AE-specific incoming directory
-                Path studyDir = incomingDir.resolve("study_" + studyUid);
-                Files.createDirectories(studyDir);
+                // Store the file in incoming/{StudyUID}/{SeriesUID}/{SOPUID}.dcm
+                Path studyDir = incomingDir.resolve(studyUid);
+                Path seriesDir = studyDir.resolve(seriesUid);
+                Files.createDirectories(seriesDir);
 
                 // Use SOP Instance UID as filename
                 String filename = sopInstanceUID + ".dcm";
-                Path outputFile = studyDir.resolve(filename);
+                Path outputFile = seriesDir.resolve(filename);
 
                 long fileSize;
                 try (DicomOutputStream dos = new DicomOutputStream(outputFile.toFile())) {
@@ -339,80 +297,12 @@ public class DicomReceiver implements AutoCloseable {
                 // Log receive event
                 logReceive(callingAE, studyUid, seriesUid, sopInstanceUID, modality, patientId, fileSize);
 
-                // Track study completion
-                trackStudyActivity(studyUid, studyDir, callingAE);
+                // Note: Study completion tracking is handled by FolderWatcher
+                // which monitors the incoming directory for activity
 
                 rsp.setInt(Tag.Status, VR.US, Status.Success);
             }
         };
-    }
-
-    /**
-     * Track study activity for detecting study completion.
-     */
-    private synchronized void trackStudyActivity(String studyUid, Path studyDir, String callingAE) {
-        lastFileReceived = System.currentTimeMillis();
-
-        if (currentStudyUid != null && !currentStudyUid.equals(studyUid)) {
-            // Different study - previous study is complete
-            notifyStudyComplete(currentStudyUid, callingAE);
-        }
-
-        currentStudyUid = studyUid;
-
-        // Schedule check for study completion
-        scheduledExecutor.schedule(() -> checkStudyComplete(studyUid, studyDir, callingAE),
-                STUDY_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-    }
-
-    /**
-     * Check if study is complete (no files received recently).
-     */
-    private synchronized void checkStudyComplete(String studyUid, Path studyDir, String callingAE) {
-        if (studyUid.equals(currentStudyUid) &&
-                System.currentTimeMillis() - lastFileReceived >= STUDY_TIMEOUT_MS) {
-            notifyStudyComplete(studyUid, callingAE);
-            currentStudyUid = null;
-        }
-    }
-
-    /**
-     * Notify that a study is complete.
-     */
-    private void notifyStudyComplete(String studyUid, String callingAE) {
-        if (onStudyComplete != null) {
-            try {
-                Path studyPath = incomingDir.resolve("study_" + studyUid);
-                long fileCount = Files.list(studyPath).filter(Files::isRegularFile).count();
-                long totalSize = Files.walk(studyPath)
-                        .filter(Files::isRegularFile)
-                        .mapToLong(p -> p.toFile().length())
-                        .sum();
-
-                totalStudiesReceived++;
-
-                ReceivedStudy study = new ReceivedStudy();
-                study.setStudyUid(studyUid);
-                study.setPath(studyPath);
-                study.setFileCount(fileCount);
-                study.setTotalSize(totalSize);
-                study.setAeTitle(aeTitle);
-                study.setCallingAeTitle(callingAE);
-                study.setReceivedAt(LocalDateTime.now());
-
-                log.info("[{}] Study complete: {} ({} files, {} bytes) from {}",
-                        aeTitle, studyUid, fileCount, formatBytes(totalSize), callingAE);
-
-                logEvent("STUDY_COMPLETE", String.format(
-                        "Study %s complete: %d files, %s from %s",
-                        studyUid, fileCount, formatBytes(totalSize), callingAE));
-
-                onStudyComplete.accept(study);
-            } catch (Exception e) {
-                log.error("[{}] Error notifying study complete: {}", aeTitle, e.getMessage(), e);
-                logEvent("ERROR", "Failed to process study " + studyUid + ": " + e.getMessage());
-            }
-        }
     }
 
     /**
@@ -694,13 +584,13 @@ public class DicomReceiver implements AutoCloseable {
         public Path getStudyDir() { return path; }
 
         /**
-         * Get list of DICOM files in this study.
+         * Get list of DICOM files in this study (recursively from series subdirectories).
          */
         public List<File> getFiles() {
             if (path == null || !Files.exists(path)) {
                 return Collections.emptyList();
             }
-            try (Stream<Path> stream = Files.list(path)) {
+            try (Stream<Path> stream = Files.walk(path)) {
                 return stream
                     .filter(Files::isRegularFile)
                     .map(Path::toFile)
