@@ -458,61 +458,35 @@ public class DicomReceiver implements AutoCloseable {
     }
 
     /**
-     * Add transfer capabilities for all common SOP classes.
+     * Add transfer capabilities for all storage SOP classes.
+     * Uses wildcard "*" to accept any SOP class.
      */
     private void addTransferCapabilities() {
         String[] TRANSFER_SYNTAXES = {
                 UID.ImplicitVRLittleEndian,
                 UID.ExplicitVRLittleEndian,
                 UID.ExplicitVRBigEndian,
+                UID.DeflatedExplicitVRLittleEndian,
                 UID.JPEGLosslessSV1,
                 UID.JPEGLossless,
                 UID.JPEG2000,
                 UID.JPEG2000Lossless,
                 UID.JPEGBaseline8Bit,
                 UID.JPEGExtended12Bit,
-                UID.RLELossless
+                UID.RLELossless,
+                UID.MPEG2MPML,
+                UID.MPEG2MPHL,
+                UID.MPEG4HP41,
+                UID.MPEG4HP41BD
         };
 
-        String[] SOP_CLASSES = {
-                UID.Verification,
-                UID.CTImageStorage,
-                UID.MRImageStorage,
-                UID.EnhancedMRImageStorage,
-                UID.EnhancedCTImageStorage,
-                UID.PositronEmissionTomographyImageStorage,
-                UID.NuclearMedicineImageStorage,
-                UID.UltrasoundImageStorage,
-                UID.UltrasoundMultiFrameImageStorage,
-                UID.SecondaryCaptureImageStorage,
-                UID.DigitalXRayImageStorageForPresentation,
-                UID.DigitalXRayImageStorageForProcessing,
-                UID.DigitalMammographyXRayImageStorageForPresentation,
-                UID.DigitalMammographyXRayImageStorageForProcessing,
-                UID.ComputedRadiographyImageStorage,
-                UID.RTImageStorage,
-                UID.RTDoseStorage,
-                UID.RTStructureSetStorage,
-                UID.RTPlanStorage,
-                UID.EncapsulatedPDFStorage,
-                UID.BasicTextSRStorage,
-                UID.EnhancedSRStorage,
-                UID.ComprehensiveSRStorage,
-                UID.GrayscaleSoftcopyPresentationStateStorage,
-                UID.RawDataStorage,
-                UID.XRayAngiographicImageStorage,
-                UID.XRayRadiofluoroscopicImageStorage,
-                UID.VLPhotographicImageStorage,
-                UID.VideoEndoscopicImageStorage,
-                UID.OphthalmicPhotography8BitImageStorage,
-                UID.OphthalmicTomographyImageStorage,
-                UID.BreastTomosynthesisImageStorage
-        };
+        // Accept ALL storage SOP classes using wildcard
+        ae.addTransferCapability(new TransferCapability(null, "*",
+                TransferCapability.Role.SCP, TRANSFER_SYNTAXES));
 
-        for (String sopClass : SOP_CLASSES) {
-            ae.addTransferCapability(new TransferCapability(null, sopClass,
-                    TransferCapability.Role.SCP, TRANSFER_SYNTAXES));
-        }
+        // Verification must be explicit
+        ae.addTransferCapability(new TransferCapability(null, UID.Verification,
+                TransferCapability.Role.SCP, UID.ImplicitVRLittleEndian));
     }
 
     private String formatBytes(long bytes) {
