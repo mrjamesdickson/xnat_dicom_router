@@ -661,6 +661,13 @@ public class AppConfig {
         @JsonProperty("auto_import")
         private boolean autoImport = false;
 
+        /**
+         * Auto-index on receive - when true, studies will be automatically indexed
+         * for searching after successful routing.
+         */
+        @JsonProperty("auto_index_on_receive")
+        private boolean autoIndexOnReceive = false;
+
         public String getAeTitle() { return aeTitle; }
         public void setAeTitle(String aeTitle) { this.aeTitle = aeTitle; }
 
@@ -708,6 +715,9 @@ public class AppConfig {
 
         public boolean isAutoImport() { return autoImport; }
         public void setAutoImport(boolean autoImport) { this.autoImport = autoImport; }
+
+        public boolean isAutoIndexOnReceive() { return autoIndexOnReceive; }
+        public void setAutoIndexOnReceive(boolean autoIndexOnReceive) { this.autoIndexOnReceive = autoIndexOnReceive; }
 
         @Override
         public String toString() {

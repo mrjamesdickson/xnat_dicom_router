@@ -14,6 +14,7 @@ import Settings from './pages/Settings'
 import Login from './pages/Login'
 import OCR from './pages/OCR'
 import QueryRetrieve from './pages/QueryRetrieve'
+import Search from './pages/Search'
 import { checkAuth, setAuthToken, clearAuthToken, getAuthToken } from './hooks/useApi'
 
 const APP_VERSION = '2.0.0'
@@ -255,6 +256,9 @@ function App() {
           <NavLink to="/storage" className={location.pathname === '/storage' ? 'active' : ''}>
             Storage
           </NavLink>
+          <NavLink to="/search" className={location.pathname === '/search' ? 'active' : ''}>
+            Search
+          </NavLink>
           <NavLink to="/logs" className={location.pathname === '/logs' ? 'active' : ''}>
             Logs
           </NavLink>
@@ -304,6 +308,7 @@ function App() {
           <Route path="/query-retrieve" element={<QueryRetrieve />} />
           <Route path="/import" element={<Import />} />
           <Route path="/storage" element={<Storage />} />
+          <Route path="/search" element={<Search />} />
           <Route path="/dicom-viewer" element={<DicomViewer />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/settings" element={<Settings />} />

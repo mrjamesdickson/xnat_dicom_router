@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { useFetch } from '../hooks/useApi'
+import { Chart } from '../components/Chart'
 
 interface StatusData {
   version: string
@@ -39,11 +41,48 @@ interface ActiveTransfersData {
   count: number
 }
 
+interface MetricPoint {
+  timestamp: number
+  timestampIso: string
+  transfers: number
+  successful: number
+  failed: number
+  bytes: number
+  files: number
+}
+
+interface MetricsData {
+  resolution: string
+  count: number
+  data: MetricPoint[]
+}
+
+interface MetricsSummary {
+  currentThroughput: number
+  currentBytesPerMinute: number
+  routes: Record<string, {
+    aeTitle: string
+    totalTransfers: number
+    successfulTransfers: number
+    failedTransfers: number
+    totalBytes: number
+    totalFiles: number
+    recentThroughput: number
+  }>
+}
+
 export default function Dashboard() {
+  const [timeRange, setTimeRange] = useState<'minutes' | 'hours' | 'days'>('minutes')
+
   const { data: status, loading: statusLoading, error: statusError } = useFetch<StatusData>('/status', 30000)
   const { data: health, loading: healthLoading, error: healthError } = useFetch<HealthData>('/status/health', 10000)
   // Poll active transfers more frequently (every 2 seconds) for live progress
   const { data: activeTransfers } = useFetch<ActiveTransfersData>('/transfers/active', 2000)
+  // Fetch metrics data
+  const { data: metricsSummary } = useFetch<MetricsSummary>('/metrics', 30000)
+  const { data: minuteMetrics } = useFetch<MetricsData>('/metrics/timeseries/minutes?count=60', 30000)
+  const { data: hourMetrics } = useFetch<MetricsData>('/metrics/timeseries/hours?count=24', 60000)
+  const { data: dayMetrics } = useFetch<MetricsData>('/metrics/timeseries/days?count=30', 300000)
 
   const formatBytes = (bytes: number) => {
     if (bytes < 1024) return bytes + ' B'
@@ -281,6 +320,110 @@ export default function Dashboard() {
           </table>
         </div>
       </div>
+
+      {/* Metrics Charts Section */}
+      <div className="card">
+        <div className="card-header">
+          <h2 className="card-title">Transfer Metrics</h2>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              className={`btn btn-sm ${timeRange === 'minutes' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setTimeRange('minutes')}
+            >
+              Last Hour
+            </button>
+            <button
+              className={`btn btn-sm ${timeRange === 'hours' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setTimeRange('hours')}
+            >
+              Last 24 Hours
+            </button>
+            <button
+              className={`btn btn-sm ${timeRange === 'days' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setTimeRange('days')}
+            >
+              Last 30 Days
+            </button>
+          </div>
+        </div>
+
+        {/* Current throughput stats */}
+        {metricsSummary && (
+          <div className="stat-grid" style={{ marginBottom: '1rem' }}>
+            <div className="stat-item">
+              <div className="stat-value">{metricsSummary.currentThroughput.toFixed(1)}</div>
+              <div className="stat-label">Transfers/min</div>
+            </div>
+            <div className="stat-item">
+              <div className="stat-value">{formatBytes(metricsSummary.currentBytesPerMinute)}</div>
+              <div className="stat-label">Throughput/min</div>
+            </div>
+          </div>
+        )}
+
+        {/* Charts */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <Chart
+            data={
+              timeRange === 'minutes' ? minuteMetrics?.data || [] :
+              timeRange === 'hours' ? hourMetrics?.data || [] :
+              dayMetrics?.data || []
+            }
+            type="transfers"
+            title="Transfer Activity"
+            width={700}
+            height={200}
+          />
+          <Chart
+            data={
+              timeRange === 'minutes' ? minuteMetrics?.data || [] :
+              timeRange === 'hours' ? hourMetrics?.data || [] :
+              dayMetrics?.data || []
+            }
+            type="bytes"
+            title="Data Volume"
+            width={700}
+            height={200}
+          />
+        </div>
+      </div>
+
+      {/* Route Performance */}
+      {metricsSummary && Object.keys(metricsSummary.routes).length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <h2 className="card-title">Route Performance</h2>
+          </div>
+          <div className="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>AE Title</th>
+                  <th>Total Transfers</th>
+                  <th>Success</th>
+                  <th>Failed</th>
+                  <th>Data Volume</th>
+                  <th>Throughput</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(metricsSummary.routes).map(([aeTitle, route]) => (
+                  <tr key={aeTitle}>
+                    <td><strong>{route.aeTitle}</strong></td>
+                    <td>{route.totalTransfers}</td>
+                    <td style={{ color: 'var(--success-color)' }}>{route.successfulTransfers}</td>
+                    <td style={{ color: route.failedTransfers > 0 ? 'var(--danger-color)' : undefined }}>
+                      {route.failedTransfers}
+                    </td>
+                    <td>{formatBytes(route.totalBytes)}</td>
+                    <td>{route.recentThroughput.toFixed(1)}/min</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

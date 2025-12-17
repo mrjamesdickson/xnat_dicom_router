@@ -10,7 +10,10 @@ package io.xnatworks.router.api;
 import io.xnatworks.router.anon.ScriptLibrary;
 import io.xnatworks.router.broker.HonestBrokerService;
 import io.xnatworks.router.config.AppConfig;
+import io.xnatworks.router.index.DicomIndexer;
+import io.xnatworks.router.metrics.MetricsCollector;
 import io.xnatworks.router.routing.DestinationManager;
+import io.xnatworks.router.store.RouterStore;
 import io.xnatworks.router.tracking.TransferTracker;
 import org.eclipse.jetty.http.UriCompliance;
 import org.eclipse.jetty.server.HttpConfiguration;
@@ -40,6 +43,9 @@ public class AdminServer {
     private final DestinationManager destinationManager;
     private final TransferTracker transferTracker;
     private final ScriptLibrary scriptLibrary;
+    private final MetricsCollector metricsCollector;
+    private final RouterStore routerStore;
+    private final DicomIndexer dicomIndexer;
     private final boolean headless;
 
     private Server server;
@@ -48,7 +54,7 @@ public class AdminServer {
                        DestinationManager destinationManager,
                        TransferTracker transferTracker,
                        ScriptLibrary scriptLibrary) {
-        this(port, host, config, destinationManager, transferTracker, scriptLibrary, false);
+        this(port, host, config, destinationManager, transferTracker, scriptLibrary, null, null, null, false);
     }
 
     public AdminServer(int port, String host, AppConfig config,
@@ -56,12 +62,35 @@ public class AdminServer {
                        TransferTracker transferTracker,
                        ScriptLibrary scriptLibrary,
                        boolean headless) {
+        this(port, host, config, destinationManager, transferTracker, scriptLibrary, null, null, null, headless);
+    }
+
+    public AdminServer(int port, String host, AppConfig config,
+                       DestinationManager destinationManager,
+                       TransferTracker transferTracker,
+                       ScriptLibrary scriptLibrary,
+                       MetricsCollector metricsCollector,
+                       boolean headless) {
+        this(port, host, config, destinationManager, transferTracker, scriptLibrary, metricsCollector, null, null, headless);
+    }
+
+    public AdminServer(int port, String host, AppConfig config,
+                       DestinationManager destinationManager,
+                       TransferTracker transferTracker,
+                       ScriptLibrary scriptLibrary,
+                       MetricsCollector metricsCollector,
+                       RouterStore routerStore,
+                       DicomIndexer dicomIndexer,
+                       boolean headless) {
         this.port = port;
         this.host = host;
         this.config = config;
         this.destinationManager = destinationManager;
         this.transferTracker = transferTracker;
         this.scriptLibrary = scriptLibrary;
+        this.metricsCollector = metricsCollector;
+        this.routerStore = routerStore;
+        this.dicomIndexer = dicomIndexer;
         this.headless = headless;
     }
 
@@ -96,6 +125,9 @@ public class AdminServer {
         final ImportResource importResource = new ImportResource(config, destinationManager, transferTracker, scriptLibrary, honestBrokerService);
         final OcrResource ocrResource = new OcrResource(config);
         final QueryRetrieveResource queryRetrieveResource = new QueryRetrieveResource(config, destinationManager, transferTracker);
+        final MetricsResource metricsResource = metricsCollector != null ? new MetricsResource(metricsCollector) : null;
+        final SearchResource searchResource = (routerStore != null && dicomIndexer != null)
+                ? new SearchResource(config, routerStore, dicomIndexer) : null;
         final AuthFilter authFilter = new AuthFilter(config);
 
         ResourceConfig resourceConfig = new ResourceConfig();
@@ -117,6 +149,12 @@ public class AdminServer {
                 bind(importResource).to(ImportResource.class);
                 bind(ocrResource).to(OcrResource.class);
                 bind(queryRetrieveResource).to(QueryRetrieveResource.class);
+                if (metricsResource != null) {
+                    bind(metricsResource).to(MetricsResource.class);
+                }
+                if (searchResource != null) {
+                    bind(searchResource).to(SearchResource.class);
+                }
             }
         });
 
@@ -134,6 +172,12 @@ public class AdminServer {
         resourceConfig.register(ImportResource.class);
         resourceConfig.register(OcrResource.class);
         resourceConfig.register(QueryRetrieveResource.class);
+        if (metricsResource != null) {
+            resourceConfig.register(MetricsResource.class);
+        }
+        if (searchResource != null) {
+            resourceConfig.register(SearchResource.class);
+        }
 
         // Register auth filter
         resourceConfig.register(authFilter);

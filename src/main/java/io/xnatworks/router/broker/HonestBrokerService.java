@@ -223,10 +223,12 @@ public class HonestBrokerService {
         // Check token cache
         TokenCache cached = tokenCache.get(brokerName);
         if (cached != null && !cached.isExpired()) {
+            log.debug("[HonestBroker:{}] Using cached token (expires in {}ms)", brokerName, cached.expiresAt - System.currentTimeMillis());
             return cached.token;
         }
 
         String stsUrl = "https://" + brokerConfig.getStsHost() + "/token";
+        log.info("[HonestBroker:{}] Authenticating with STS at {}", brokerName, stsUrl);
 
         // Build authentication request
         String tokenJson = String.format(
@@ -234,19 +236,34 @@ public class HonestBrokerService {
             brokerConfig.getUsername(),
             brokerConfig.getAppName(),
             brokerConfig.getAppKey(),
-            brokerConfig.getPassword()
+            "***"  // Don't log actual password
         );
+        log.debug("[HonestBroker:{}] Auth request (password masked): UserName={}, AppName={}, AppKey={}",
+                brokerName, brokerConfig.getUsername(), brokerConfig.getAppName(), brokerConfig.getAppKey());
 
+        long startTime = System.currentTimeMillis();
         try {
-            String token = doPost(stsUrl, tokenJson, null, brokerConfig.getTimeout());
+            // Build actual request with real password
+            String actualRequest = String.format(
+                "{\"UserName\":\"%s\",\"AppName\":\"%s\",\"AppKey\":\"%s\",\"Password\":\"%s\"}",
+                brokerConfig.getUsername(),
+                brokerConfig.getAppName(),
+                brokerConfig.getAppKey(),
+                brokerConfig.getPassword()
+            );
+            String token = doPost(stsUrl, actualRequest, null, brokerConfig.getTimeout());
+            long duration = System.currentTimeMillis() - startTime;
             if (token != null) {
                 // Cache token for 50 minutes (assuming 1 hour expiry)
                 tokenCache.put(brokerName, new TokenCache(token, System.currentTimeMillis() + 50 * 60 * 1000));
-                log.debug("Authenticated with broker {} successfully", brokerName);
+                log.info("[HonestBroker:{}] Authentication successful ({}ms), token cached for 50 minutes", brokerName, duration);
+            } else {
+                log.warn("[HonestBroker:{}] Authentication returned null token ({}ms)", brokerName, duration);
             }
             return token;
         } catch (Exception e) {
-            log.error("Authentication failed for broker {}: {}", brokerName, e.getMessage(), e);
+            long duration = System.currentTimeMillis() - startTime;
+            log.error("[HonestBroker:{}] Authentication FAILED ({}ms): {}", brokerName, duration, e.getMessage(), e);
             return null;
         }
     }
@@ -255,28 +272,42 @@ public class HonestBrokerService {
      * Perform lookup using remote DeIdentification API.
      */
     private String remoteLookup(String brokerName, HonestBrokerConfig brokerConfig, String idIn) {
+        log.info("[HonestBroker:{}] Remote lookup requested for idIn={}", brokerName, idIn);
+
         String token = authenticate(brokerName, brokerConfig);
         if (token == null) {
-            log.error("Cannot lookup - authentication failed for broker {}", brokerName);
+            log.error("[HonestBroker:{}] Cannot lookup - authentication failed", brokerName);
             return null;
         }
 
         String apiUrl = String.format("https://%s/DeIdentification/lookup?idIn=%s",
                 brokerConfig.getApiHost(), idIn);
+        log.debug("[HonestBroker:{}] Calling API: GET {}", brokerName, apiUrl);
 
+        long startTime = System.currentTimeMillis();
         try {
             String response = doGet(apiUrl, "Bearer " + token, brokerConfig.getTimeout());
+            long duration = System.currentTimeMillis() - startTime;
+
             if (response != null) {
+                log.debug("[HonestBroker:{}] API response ({}ms): {}", brokerName, duration,
+                        response.length() > 200 ? response.substring(0, 200) + "..." : response);
+
                 // Parse response - expecting array of lookup results
                 LookupResult[] results = objectMapper.readValue(response, LookupResult[].class);
                 if (results != null && results.length > 0) {
                     String idOut = results[0].getIdOut();
-                    log.debug("Lookup successful for broker {} idIn {} -> idOut {}", brokerName, idIn, idOut);
+                    log.info("[HonestBroker:{}] Lookup SUCCESS ({}ms): idIn={} -> idOut={}", brokerName, duration, idIn, idOut);
                     return idOut;
+                } else {
+                    log.warn("[HonestBroker:{}] Lookup returned empty results ({}ms): idIn={}", brokerName, duration, idIn);
                 }
+            } else {
+                log.warn("[HonestBroker:{}] Lookup returned null response ({}ms): idIn={}", brokerName, duration, idIn);
             }
         } catch (Exception e) {
-            log.error("Lookup failed for broker {} idIn {}: {}", brokerName, idIn, e.getMessage(), e);
+            long duration = System.currentTimeMillis() - startTime;
+            log.error("[HonestBroker:{}] Lookup FAILED ({}ms) for idIn={}: {}", brokerName, duration, idIn, e.getMessage(), e);
         }
         return null;
     }
@@ -285,27 +316,41 @@ public class HonestBrokerService {
      * Perform reverse lookup using remote DeIdentification API.
      */
     private String remoteReverseLookup(String brokerName, HonestBrokerConfig brokerConfig, String idOut) {
+        log.info("[HonestBroker:{}] Remote reverse lookup requested for idOut={}", brokerName, idOut);
+
         String token = authenticate(brokerName, brokerConfig);
         if (token == null) {
-            log.error("Cannot reverse lookup - authentication failed for broker {}", brokerName);
+            log.error("[HonestBroker:{}] Cannot reverse lookup - authentication failed", brokerName);
             return null;
         }
 
         String apiUrl = String.format("https://%s/DeIdentification/lookup?idOut=%s",
                 brokerConfig.getApiHost(), idOut);
+        log.debug("[HonestBroker:{}] Calling API: GET {}", brokerName, apiUrl);
 
+        long startTime = System.currentTimeMillis();
         try {
             String response = doGet(apiUrl, "Bearer " + token, brokerConfig.getTimeout());
+            long duration = System.currentTimeMillis() - startTime;
+
             if (response != null) {
+                log.debug("[HonestBroker:{}] API response ({}ms): {}", brokerName, duration,
+                        response.length() > 200 ? response.substring(0, 200) + "..." : response);
+
                 LookupResult[] results = objectMapper.readValue(response, LookupResult[].class);
                 if (results != null && results.length > 0) {
                     String idIn = results[0].getIdIn();
-                    log.debug("Reverse lookup successful for broker {} idOut {} -> idIn {}", brokerName, idOut, idIn);
+                    log.info("[HonestBroker:{}] Reverse lookup SUCCESS ({}ms): idOut={} -> idIn={}", brokerName, duration, idOut, idIn);
                     return idIn;
+                } else {
+                    log.warn("[HonestBroker:{}] Reverse lookup returned empty results ({}ms): idOut={}", brokerName, duration, idOut);
                 }
+            } else {
+                log.warn("[HonestBroker:{}] Reverse lookup returned null response ({}ms): idOut={}", brokerName, duration, idOut);
             }
         } catch (Exception e) {
-            log.error("Reverse lookup failed for broker {} idOut {}: {}", brokerName, idOut, e.getMessage(), e);
+            long duration = System.currentTimeMillis() - startTime;
+            log.error("[HonestBroker:{}] Reverse lookup FAILED ({}ms) for idOut={}: {}", brokerName, duration, idOut, e.getMessage(), e);
         }
         return null;
     }

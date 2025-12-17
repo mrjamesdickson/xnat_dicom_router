@@ -314,6 +314,11 @@ tr:hover {
   background-color: #e9ecef;
 }
 
+.btn-sm {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+}
+
 /* Forms */
 .form-group {
   margin-bottom: 1rem;

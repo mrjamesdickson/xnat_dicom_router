@@ -12,7 +12,9 @@ import io.xnatworks.router.broker.HonestBrokerService;
 import io.xnatworks.router.config.AppConfig;
 import io.xnatworks.router.dicom.DicomClient;
 import io.xnatworks.router.dicom.DicomReceiver;
+import io.xnatworks.router.metrics.MetricsCollector;
 import io.xnatworks.router.routing.DestinationManager;
+import io.xnatworks.router.store.RouterStore;
 import io.xnatworks.router.tracking.TransferTracker;
 import io.xnatworks.router.tracking.StorageCleanupService;
 import io.xnatworks.router.xnat.XnatClient;
@@ -124,6 +126,16 @@ public class DicomRouter implements Callable<Integer> {
             // Initialize honest broker service
             HonestBrokerService honestBrokerService = new HonestBrokerService(config);
 
+            // Initialize router store for persistent settings and metrics
+            RouterStore routerStore = new RouterStore(baseDir.toString());
+
+            // Initialize metrics collector with persistence
+            MetricsCollector metricsCollector = new MetricsCollector(routerStore);
+            metricsCollector.start();
+
+            // Initialize DICOM indexer for search functionality
+            io.xnatworks.router.index.DicomIndexer dicomIndexer = new io.xnatworks.router.index.DicomIndexer(routerStore);
+
             // Determine which routes to start
             List<AppConfig.RouteConfig> routesToStart = new ArrayList<>();
             if (routes != null && !routes.isEmpty()) {
@@ -150,12 +162,13 @@ public class DicomRouter implements Callable<Integer> {
 
             // Start receivers
             List<DicomReceiver> receivers = new ArrayList<>();
+            final io.xnatworks.router.index.DicomIndexer indexerForCallback = dicomIndexer;
             for (AppConfig.RouteConfig route : routesToStart) {
                 DicomReceiver receiver = new DicomReceiver(
                         route,
                         config.getReceiver().getBaseDir(),
                         study -> processStudy(study, route, config, scriptLibrary,
-                                destinationManager, transferTracker, honestBrokerService)
+                                destinationManager, transferTracker, honestBrokerService, indexerForCallback)
                 );
                 receiver.start();
                 receivers.add(receiver);
@@ -174,7 +187,10 @@ public class DicomRouter implements Callable<Integer> {
                         destinationManager,
                         transferTracker,
                         scriptLibrary,
-                        headless  // headless mode = API only, no UI
+                        metricsCollector,  // metrics collector for dashboard
+                        routerStore,       // router store for search functionality
+                        dicomIndexer,      // DICOM indexer for search
+                        headless           // headless mode = API only, no UI
                 );
                 adminServer.start();
             }
@@ -212,11 +228,15 @@ public class DicomRouter implements Callable<Integer> {
             // Add shutdown hook
             final io.xnatworks.router.api.AdminServer finalAdminServer = adminServer;
             final StorageCleanupService finalCleanupService = cleanupService;
+            final MetricsCollector finalMetricsCollector = metricsCollector;
+            final io.xnatworks.router.index.DicomIndexer finalDicomIndexer = dicomIndexer;
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 log.info("Shutting down...");
                 receivers.forEach(DicomReceiver::stop);
                 destinationManager.close();
                 finalCleanupService.close();
+                finalMetricsCollector.stop();
+                finalDicomIndexer.shutdown();
                 if (finalAdminServer != null) {
                     try {
                         finalAdminServer.stop();
@@ -237,7 +257,8 @@ public class DicomRouter implements Callable<Integer> {
                                   ScriptLibrary scriptLibrary,
                                   DestinationManager destinationManager,
                                   TransferTracker transferTracker,
-                                  HonestBrokerService honestBrokerService) {
+                                  HonestBrokerService honestBrokerService,
+                                  io.xnatworks.router.index.DicomIndexer dicomIndexer) {
             log.info("[{}] Processing study: {} ({} files)",
                     route.getAeTitle(), study.getStudyUid(), study.getFileCount());
 
@@ -424,6 +445,18 @@ public class DicomRouter implements Callable<Integer> {
                     log.info("[{}] Transfer {} completed successfully", route.getAeTitle(), transferId);
                 } else {
                     log.warn("[{}] Transfer {} partially completed", route.getAeTitle(), transferId);
+                }
+
+                // Auto-index if enabled for this route
+                if (route.isAutoIndexOnReceive() && dicomIndexer != null) {
+                    try {
+                        log.debug("[{}] Auto-indexing study {} on receive", route.getAeTitle(), study.getStudyUid());
+                        dicomIndexer.indexFiles(study.getFiles(), route.getAeTitle());
+                        log.info("[{}] Auto-indexed study {} ({} files)", route.getAeTitle(), study.getStudyUid(), study.getFileCount());
+                    } catch (Exception e) {
+                        // Don't fail the transfer if indexing fails
+                        log.warn("[{}] Failed to auto-index study {}: {}", route.getAeTitle(), study.getStudyUid(), e.getMessage());
+                    }
                 }
             } else {
                 moveStudyToFailed(study, route);
