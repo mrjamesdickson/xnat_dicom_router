@@ -344,8 +344,14 @@ public class DicomRouter implements Callable<Integer> {
                                     // For remote brokers, also lookup accession number for session label
                                     // Session format: {deidentifiedPatientId}-{deidentifiedAccessionNumber}
                                     String originalAccession = extractAccessionNumber(study);
+                                    if ("UNKNOWN".equals(originalAccession) || originalAccession == null || originalAccession.isEmpty()) {
+                                        // AccessionNumber not present in DICOM - fail transfer
+                                        log.error("[{}] Honest broker '{}' cannot process - AccessionNumber is missing from DICOM data",
+                                                route.getAeTitle(), routeDest.getHonestBrokerName());
+                                        throw new RuntimeException("AccessionNumber is required for honest broker de-identification but was not found in DICOM");
+                                    }
                                     String deidentifiedAccession = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalAccession);
-                                    if (deidentifiedAccession != null && !"UNKNOWN".equals(originalAccession)) {
+                                    if (deidentifiedAccession != null) {
                                         sessionLabel = deidentifiedPatientId + "-" + deidentifiedAccession;
                                         log.debug("[{}] Honest broker '{}' session label: {} (accession '{}' -> '{}')",
                                                 route.getAeTitle(), routeDest.getHonestBrokerName(), sessionLabel, originalAccession, deidentifiedAccession);
@@ -1480,8 +1486,14 @@ public class DicomRouter implements Callable<Integer> {
                                     // For remote brokers, also lookup accession number for session label
                                     // Session format: {deidentifiedPatientId}-{deidentifiedAccessionNumber}
                                     String originalAccession = extractAccessionNumberFromFiles(study.getFiles());
+                                    if ("UNKNOWN".equals(originalAccession) || originalAccession == null || originalAccession.isEmpty()) {
+                                        // AccessionNumber not present in DICOM - fail transfer
+                                        log.error("[IMPORT] Honest broker '{}' cannot process - AccessionNumber is missing from DICOM data",
+                                                routeDest.getHonestBrokerName());
+                                        throw new RuntimeException("AccessionNumber is required for honest broker de-identification but was not found in DICOM");
+                                    }
                                     String deidentifiedAccession = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalAccession);
-                                    if (deidentifiedAccession != null && !"UNKNOWN".equals(originalAccession)) {
+                                    if (deidentifiedAccession != null) {
                                         sessionLabel = deidentifiedPatientId + "-" + deidentifiedAccession;
                                     } else {
                                         // Fail if accession lookup fails - don't send without proper de-identification
