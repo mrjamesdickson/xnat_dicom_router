@@ -697,12 +697,12 @@ public class HonestBrokersResource {
                 broker.setTimeout(toInt(connection.get("timeout"), 30));
             }
         } else {
-            // Flat structure
-            if (data.containsKey("stsHost")) {
-                broker.setStsHost((String) data.get("stsHost"));
+            // Flat structure - support both camelCase and snake_case
+            if (data.containsKey("stsHost") || data.containsKey("sts_host")) {
+                broker.setStsHost((String) (data.containsKey("stsHost") ? data.get("stsHost") : data.get("sts_host")));
             }
-            if (data.containsKey("apiHost")) {
-                broker.setApiHost((String) data.get("apiHost"));
+            if (data.containsKey("apiHost") || data.containsKey("api_host")) {
+                broker.setApiHost((String) (data.containsKey("apiHost") ? data.get("apiHost") : data.get("api_host")));
             }
             if (data.containsKey("timeout")) {
                 broker.setTimeout(toInt(data.get("timeout"), 30));
@@ -715,28 +715,34 @@ public class HonestBrokersResource {
             if (auth.containsKey("appName")) {
                 broker.setAppName((String) auth.get("appName"));
             }
-            if (auth.containsKey("appKey")) {
-                broker.setAppKey((String) auth.get("appKey"));
+            // Only update sensitive fields if non-empty (don't overwrite with empty string)
+            String authAppKey = (String) auth.get("appKey");
+            if (authAppKey != null && !authAppKey.isEmpty()) {
+                broker.setAppKey(authAppKey);
             }
             if (auth.containsKey("username")) {
                 broker.setUsername((String) auth.get("username"));
             }
-            if (auth.containsKey("password")) {
-                broker.setPassword((String) auth.get("password"));
+            String authPassword = (String) auth.get("password");
+            if (authPassword != null && !authPassword.isEmpty()) {
+                broker.setPassword(authPassword);
             }
         } else {
             // Flat structure
-            if (data.containsKey("appName")) {
-                broker.setAppName((String) data.get("appName"));
+            if (data.containsKey("appName") || data.containsKey("app_name")) {
+                broker.setAppName((String) (data.containsKey("appName") ? data.get("appName") : data.get("app_name")));
             }
-            if (data.containsKey("appKey")) {
-                broker.setAppKey((String) data.get("appKey"));
+            // Only update sensitive fields if non-empty (don't overwrite with empty string)
+            String appKey = (String) (data.containsKey("appKey") ? data.get("appKey") : data.get("app_key"));
+            if (appKey != null && !appKey.isEmpty()) {
+                broker.setAppKey(appKey);
             }
             if (data.containsKey("username")) {
                 broker.setUsername((String) data.get("username"));
             }
-            if (data.containsKey("password")) {
-                broker.setPassword((String) data.get("password"));
+            String password = (String) data.get("password");
+            if (password != null && !password.isEmpty()) {
+                broker.setPassword(password);
             }
         }
 
