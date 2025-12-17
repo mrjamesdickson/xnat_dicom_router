@@ -7,6 +7,7 @@
  */
 package io.xnatworks.router.broker;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.xnatworks.router.config.AppConfig;
 import io.xnatworks.router.config.AppConfig.HonestBrokerConfig;
@@ -519,8 +520,10 @@ public class HonestBrokerService {
     }
 
     /**
-     * POJO for parsing lookup results from API.
+     * Lookup result from remote honest broker API.
+     * Uses @JsonIgnoreProperties to handle unknown fields from different API versions.
      */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     private static class LookupResult {
         private String idIn;
         private String idOut;
