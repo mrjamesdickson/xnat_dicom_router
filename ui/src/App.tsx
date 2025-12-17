@@ -15,6 +15,7 @@ import Login from './pages/Login'
 import OCR from './pages/OCR'
 import QueryRetrieve from './pages/QueryRetrieve'
 import Search from './pages/Search'
+import Index from './pages/Index'
 import { checkAuth, setAuthToken, clearAuthToken, getAuthToken } from './hooks/useApi'
 
 const APP_VERSION = '2.0.0'
@@ -162,12 +163,67 @@ const THEME_LABELS: Record<Theme, string> = {
   'ocean': 'Ocean'
 }
 
+// Navigation menu structure
+interface NavItem {
+  path: string
+  label: string
+  icon: string
+}
+
+interface NavSection {
+  title: string
+  items: NavItem[]
+}
+
+const NAV_SECTIONS: NavSection[] = [
+  {
+    title: 'Overview',
+    items: [
+      { path: '/', label: 'Dashboard', icon: '' },
+    ]
+  },
+  {
+    title: 'Configuration',
+    items: [
+      { path: '/routes', label: 'Routes', icon: '' },
+      { path: '/destinations', label: 'Destinations', icon: '' },
+      { path: '/brokers', label: 'Brokers', icon: '' },
+      { path: '/scripts', label: 'Scripts', icon: '' },
+      { path: '/ocr', label: 'OCR', icon: '' },
+    ]
+  },
+  {
+    title: 'Operations',
+    items: [
+      { path: '/transfers', label: 'Transfers', icon: '' },
+      { path: '/query-retrieve', label: 'Query/Retrieve', icon: '' },
+      { path: '/import', label: 'Import', icon: '' },
+      { path: '/storage', label: 'Storage', icon: '' },
+    ]
+  },
+  {
+    title: 'Data',
+    items: [
+      { path: '/index', label: 'Index', icon: '' },
+      { path: '/search', label: 'Search', icon: '' },
+    ]
+  },
+  {
+    title: 'System',
+    items: [
+      { path: '/logs', label: 'Logs', icon: '' },
+      { path: '/settings', label: 'Settings', icon: '' },
+    ]
+  }
+]
+
 function App() {
   const location = useLocation()
   const [authenticated, setAuthenticated] = useState<boolean | null>(null)
   const [authRequired, setAuthRequired] = useState(true)
   const [username, setUsername] = useState<string | null>(null)
   const [showAbout, setShowAbout] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('theme')
     return (saved as Theme) || 'light'
@@ -222,98 +278,112 @@ function App() {
   }
 
   return (
-    <div className="app">
-      <header className="header">
-        <h1>XNAT DICOM Router - Admin</h1>
-        <nav className="header-nav">
-          <NavLink to="/" className={location.pathname === '/' ? 'active' : ''}>
-            Dashboard
-          </NavLink>
-          <NavLink to="/routes" className={location.pathname === '/routes' ? 'active' : ''}>
-            Routes
-          </NavLink>
-          <NavLink to="/destinations" className={location.pathname === '/destinations' ? 'active' : ''}>
-            Destinations
-          </NavLink>
-          <NavLink to="/brokers" className={location.pathname === '/brokers' ? 'active' : ''}>
-            Brokers
-          </NavLink>
-          <NavLink to="/scripts" className={location.pathname === '/scripts' ? 'active' : ''}>
-            Scripts
-          </NavLink>
-          <NavLink to="/ocr" className={location.pathname === '/ocr' ? 'active' : ''}>
-            OCR
-          </NavLink>
-          <NavLink to="/transfers" className={location.pathname === '/transfers' ? 'active' : ''}>
-            Transfers
-          </NavLink>
-          <NavLink to="/query-retrieve" className={location.pathname === '/query-retrieve' ? 'active' : ''}>
-            Q/R
-          </NavLink>
-          <NavLink to="/import" className={location.pathname === '/import' ? 'active' : ''}>
-            Import
-          </NavLink>
-          <NavLink to="/storage" className={location.pathname === '/storage' ? 'active' : ''}>
-            Storage
-          </NavLink>
-          <NavLink to="/search" className={location.pathname === '/search' ? 'active' : ''}>
-            Search
-          </NavLink>
-          <NavLink to="/logs" className={location.pathname === '/logs' ? 'active' : ''}>
-            Logs
-          </NavLink>
-          <NavLink to="/settings" className={location.pathname === '/settings' ? 'active' : ''}>
-            Settings
-          </NavLink>
-        </nav>
-        <div className="header-user">
-          <select
-            value={theme}
-            onChange={(e) => setTheme(e.target.value as Theme)}
-            title="Theme"
-          >
-            {(Object.keys(THEME_LABELS) as Theme[]).map(t => (
-              <option key={t} value={t}>{THEME_LABELS[t]}</option>
-            ))}
-          </select>
+    <div className="app-layout">
+      {/* Left Sidebar */}
+      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+        <div className="sidebar-header">
+          <div className="sidebar-logo">
+            <span className="logo-icon">🔗</span>
+          </div>
           <button
-            className="about-btn"
-            onClick={() => setShowAbout(true)}
-            title="About"
+            className="sidebar-toggle"
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
-            ?
+            {sidebarCollapsed ? '→' : '←'}
           </button>
-          {username && (
-            <>
-              <span style={{ opacity: 0.8 }}>{username}</span>
-              <button onClick={handleLogout}>
-                Logout
-              </button>
-            </>
+        </div>
+
+        <nav className="sidebar-nav">
+          {NAV_SECTIONS.map((section) => (
+            <div key={section.title} className="nav-section">
+              {!sidebarCollapsed && <div className="nav-section-title">{section.title}</div>}
+              {section.items.map((item) => (
+                <NavLink
+                  key={item.path}
+                  to={item.path}
+                  className={({ isActive }) =>
+                    `nav-item ${isActive || (item.path === '/' && location.pathname === '/') ? 'active' : ''}`
+                  }
+                  title={sidebarCollapsed ? item.label : undefined}
+                >
+                  {!sidebarCollapsed && <span className="nav-label">{item.label}</span>}
+                </NavLink>
+              ))}
+            </div>
+          ))}
+        </nav>
+
+        <div className="sidebar-footer">
+          {!sidebarCollapsed && (
+            <div className="sidebar-user">
+              {username && <span className="user-name">{username}</span>}
+            </div>
           )}
         </div>
-      </header>
+      </aside>
 
-      <AboutModal isOpen={showAbout} onClose={() => setShowAbout(false)} />
+      {/* Main Content Area */}
+      <div className="main-area">
+        {/* Top Header Bar */}
+        <header className="top-header">
+          <div className="header-left">
+            <h1 className="page-title">
+              {NAV_SECTIONS.flatMap(s => s.items).find(item =>
+                item.path === location.pathname ||
+                (item.path === '/' && location.pathname === '/')
+              )?.label || 'DICOM Router'}
+            </h1>
+          </div>
+          <div className="header-right">
+            <span style={{ fontWeight: 600, marginRight: '1rem', color: 'var(--header-text)' }}>XNATWorks DICOM Router</span>
+            <select
+              className="theme-select"
+              value={theme}
+              onChange={(e) => setTheme(e.target.value as Theme)}
+              title="Theme"
+            >
+              {(Object.keys(THEME_LABELS) as Theme[]).map(t => (
+                <option key={t} value={t}>{THEME_LABELS[t]}</option>
+              ))}
+            </select>
+            <button
+              className="header-btn about-btn"
+              onClick={() => setShowAbout(true)}
+              title="About"
+            >
+              ?
+            </button>
+            {username && (
+              <button className="header-btn logout-btn" onClick={handleLogout}>
+                Logout
+              </button>
+            )}
+          </div>
+        </header>
 
-      <main className="main-content">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/routes" element={<Routes_Page />} />
-          <Route path="/destinations" element={<Destinations />} />
-          <Route path="/brokers" element={<Brokers />} />
-          <Route path="/scripts" element={<Scripts />} />
-          <Route path="/ocr" element={<OCR />} />
-          <Route path="/transfers" element={<Transfers />} />
-          <Route path="/query-retrieve" element={<QueryRetrieve />} />
-          <Route path="/import" element={<Import />} />
-          <Route path="/storage" element={<Storage />} />
-          <Route path="/search" element={<Search />} />
-          <Route path="/dicom-viewer" element={<DicomViewer />} />
-          <Route path="/logs" element={<Logs />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
-      </main>
+        <AboutModal isOpen={showAbout} onClose={() => setShowAbout(false)} />
+
+        <main className="main-content">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/routes" element={<Routes_Page />} />
+            <Route path="/destinations" element={<Destinations />} />
+            <Route path="/brokers" element={<Brokers />} />
+            <Route path="/scripts" element={<Scripts />} />
+            <Route path="/ocr" element={<OCR />} />
+            <Route path="/transfers" element={<Transfers />} />
+            <Route path="/query-retrieve" element={<QueryRetrieve />} />
+            <Route path="/import" element={<Import />} />
+            <Route path="/storage" element={<Storage />} />
+            <Route path="/index" element={<Index />} />
+            <Route path="/search" element={<Search />} />
+            <Route path="/dicom-viewer" element={<DicomViewer />} />
+            <Route path="/logs" element={<Logs />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+        </main>
+      </div>
     </div>
   )
 }

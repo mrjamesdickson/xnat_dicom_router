@@ -189,6 +189,7 @@ public class DicomIndexer {
         study.studyUid = studyUid;
         study.patientId = attrs.getString(Tag.PatientID);
         study.patientName = attrs.getString(Tag.PatientName);
+        study.patientSex = attrs.getString(Tag.PatientSex);
         study.studyDate = attrs.getString(Tag.StudyDate);
         study.studyTime = attrs.getString(Tag.StudyTime);
         study.accessionNumber = attrs.getString(Tag.AccessionNumber);
@@ -672,6 +673,7 @@ public class DicomIndexer {
                         study.studyUid = studyUid;
                         study.patientId = studyAttrs.getString(Tag.PatientID);
                         study.patientName = studyAttrs.getString(Tag.PatientName);
+                        study.patientSex = studyAttrs.getString(Tag.PatientSex);
                         study.studyDate = studyAttrs.getString(Tag.StudyDate);
                         study.studyTime = studyAttrs.getString(Tag.StudyTime);
                         study.accessionNumber = studyAttrs.getString(Tag.AccessionNumber);
@@ -896,6 +898,7 @@ public class DicomIndexer {
         query.setNull(Tag.StudyInstanceUID, org.dcm4che3.data.VR.UI);
         query.setNull(Tag.PatientID, org.dcm4che3.data.VR.LO);
         query.setNull(Tag.PatientName, org.dcm4che3.data.VR.PN);
+        query.setNull(Tag.PatientSex, org.dcm4che3.data.VR.CS);
 
         // Apply date filter if provided (DICOM date range syntax: "YYYYMMDD-YYYYMMDD")
         String dateRange = buildDicomDateRange(studyDateFrom, studyDateTo);

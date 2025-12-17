@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useFetch, apiPost, apiGet } from '../hooks/useApi'
 
 interface DicomSource {
@@ -75,6 +76,8 @@ type QueryMode = 'single' | 'bulk'
 type BulkIdentifierType = 'studyInstanceUID' | 'accessionNumber' | 'patientID'
 
 export default function QueryRetrieve() {
+  const [searchParams] = useSearchParams()
+
   // Sources and routes
   const { data: sourcesData, loading: loadingSources, refetch: refetchSources } = useFetch<{ sources: DicomSource[] }>('/query-retrieve/sources')
   const { data: routesData, loading: loadingRoutes } = useFetch<{ routes: TargetRoute[] }>('/query-retrieve/routes')
@@ -139,6 +142,26 @@ export default function QueryRetrieve() {
       setTargetRoute(routesData.routes[0].aeTitle)
     }
   }, [routesData, targetRoute])
+
+  // Check for pre-populated bulk query from Search page
+  useEffect(() => {
+    const mode = searchParams.get('mode')
+    if (mode === 'bulk') {
+      const storedUIDs = sessionStorage.getItem('qr_bulk_uids')
+      const storedType = sessionStorage.getItem('qr_bulk_type')
+
+      if (storedUIDs) {
+        setQueryMode('bulk')
+        setBulkIdentifiers(storedUIDs)
+        if (storedType === 'studyInstanceUID' || storedType === 'accessionNumber' || storedType === 'patientID') {
+          setBulkIdentifierType(storedType)
+        }
+        // Clear sessionStorage after reading
+        sessionStorage.removeItem('qr_bulk_uids')
+        sessionStorage.removeItem('qr_bulk_type')
+      }
+    }
+  }, [searchParams])
 
   const handleSingleQuery = async () => {
     if (!selectedSource) {

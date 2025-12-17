@@ -52,6 +52,7 @@ public class SearchResource {
     public Response searchStudies(
             @QueryParam("patientId") String patientId,
             @QueryParam("patientName") String patientName,
+            @QueryParam("patientSex") String patientSex,
             @QueryParam("studyDateFrom") String studyDateFrom,
             @QueryParam("studyDateTo") String studyDateTo,
             @QueryParam("modality") String modality,
@@ -59,12 +60,14 @@ public class SearchResource {
             @QueryParam("institutionName") String institutionName,
             @QueryParam("studyDescription") String studyDescription,
             @QueryParam("sourceRoute") String sourceRoute,
+            @QueryParam("bodyPart") String bodyPart,
             @QueryParam("limit") @DefaultValue("100") int limit,
             @QueryParam("offset") @DefaultValue("0") int offset) {
 
         SearchCriteria criteria = new SearchCriteria();
         criteria.patientId = patientId;
         criteria.patientName = patientName;
+        criteria.patientSex = patientSex;
         criteria.studyDateFrom = studyDateFrom;
         criteria.studyDateTo = studyDateTo;
         criteria.modality = modality;
@@ -72,6 +75,7 @@ public class SearchResource {
         criteria.institutionName = institutionName;
         criteria.studyDescription = studyDescription;
         criteria.sourceRoute = sourceRoute;
+        criteria.bodyPart = bodyPart;
         criteria.limit = limit;
         criteria.offset = offset;
 
@@ -190,6 +194,127 @@ public class SearchResource {
         result.put("totalStudies", dateCounts.stream().mapToInt(dc -> dc.count).sum());
 
         return Response.ok(result).build();
+    }
+
+    /**
+     * Get aggregated statistics for all fields with optional filtering.
+     * Returns counts for: patient sex, modality, institution, source route, body part, etc.
+     * Used for pie charts and bar charts in the dashboard.
+     *
+     * When filter parameters are provided, aggregations are computed only for matching studies.
+     * This enables interactive filtering in the UI where clicking on one chart updates all others.
+     */
+    @GET
+    @Path("/stats/aggregations")
+    public Response getAggregations(
+            @QueryParam("patientId") String patientId,
+            @QueryParam("patientName") String patientName,
+            @QueryParam("patientSex") String patientSex,
+            @QueryParam("studyDateFrom") String studyDateFrom,
+            @QueryParam("studyDateTo") String studyDateTo,
+            @QueryParam("modality") String modality,
+            @QueryParam("accessionNumber") String accessionNumber,
+            @QueryParam("institutionName") String institutionName,
+            @QueryParam("studyDescription") String studyDescription,
+            @QueryParam("sourceRoute") String sourceRoute,
+            @QueryParam("bodyPart") String bodyPart) {
+
+        // Build criteria from parameters
+        SearchCriteria criteria = null;
+        if (hasAnyFilter(patientId, patientName, patientSex, studyDateFrom, studyDateTo,
+                modality, accessionNumber, institutionName, studyDescription, sourceRoute, bodyPart)) {
+            criteria = new SearchCriteria();
+            criteria.patientId = patientId;
+            criteria.patientName = patientName;
+            criteria.patientSex = patientSex;
+            criteria.studyDateFrom = studyDateFrom;
+            criteria.studyDateTo = studyDateTo;
+            criteria.modality = modality;
+            criteria.accessionNumber = accessionNumber;
+            criteria.institutionName = institutionName;
+            criteria.studyDescription = studyDescription;
+            criteria.sourceRoute = sourceRoute;
+            criteria.bodyPart = bodyPart;
+        }
+
+        Map<String, List<RouterStore.FieldCount>> aggregations = store.getAllAggregations(criteria);
+        return Response.ok(aggregations).build();
+    }
+
+    private boolean hasAnyFilter(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Export search results as CSV.
+     */
+    @GET
+    @Path("/export/csv")
+    @Produces("text/csv")
+    public Response exportCsv(
+            @QueryParam("patientId") String patientId,
+            @QueryParam("patientName") String patientName,
+            @QueryParam("studyDateFrom") String studyDateFrom,
+            @QueryParam("studyDateTo") String studyDateTo,
+            @QueryParam("modality") String modality,
+            @QueryParam("accessionNumber") String accessionNumber,
+            @QueryParam("institutionName") String institutionName,
+            @QueryParam("studyDescription") String studyDescription,
+            @QueryParam("sourceRoute") String sourceRoute,
+            @QueryParam("limit") @DefaultValue("10000") int limit) {
+
+        SearchCriteria criteria = new SearchCriteria();
+        criteria.patientId = patientId;
+        criteria.patientName = patientName;
+        criteria.studyDateFrom = studyDateFrom;
+        criteria.studyDateTo = studyDateTo;
+        criteria.modality = modality;
+        criteria.accessionNumber = accessionNumber;
+        criteria.institutionName = institutionName;
+        criteria.studyDescription = studyDescription;
+        criteria.sourceRoute = sourceRoute;
+        criteria.limit = limit;
+        criteria.offset = 0;
+
+        List<IndexedStudy> studies = store.searchStudies(criteria);
+
+        // Build CSV content
+        StringBuilder csv = new StringBuilder();
+        csv.append("study_uid,patient_id,patient_name,patient_sex,study_date,accession_number,study_description,modalities,institution_name,referring_physician,series_count,instance_count\n");
+
+        for (IndexedStudy study : studies) {
+            csv.append(escapeCsv(study.studyUid)).append(",");
+            csv.append(escapeCsv(study.patientId)).append(",");
+            csv.append(escapeCsv(study.patientName)).append(",");
+            csv.append(escapeCsv(study.patientSex)).append(",");
+            csv.append(escapeCsv(study.studyDate)).append(",");
+            csv.append(escapeCsv(study.accessionNumber)).append(",");
+            csv.append(escapeCsv(study.studyDescription)).append(",");
+            csv.append(escapeCsv(study.modalities)).append(",");
+            csv.append(escapeCsv(study.institutionName)).append(",");
+            csv.append(escapeCsv(study.referringPhysician)).append(",");
+            csv.append(study.seriesCount).append(",");
+            csv.append(study.instanceCount).append("\n");
+        }
+
+        String filename = "dicom_studies_" + java.time.LocalDate.now() + ".csv";
+        return Response.ok(csv.toString())
+                .header("Content-Disposition", "attachment; filename=\"" + filename + "\"")
+                .build();
+    }
+
+    private String escapeCsv(String value) {
+        if (value == null) return "";
+        // Escape quotes and wrap in quotes if contains comma, quote, or newline
+        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
     }
 
     // ========================================================================
