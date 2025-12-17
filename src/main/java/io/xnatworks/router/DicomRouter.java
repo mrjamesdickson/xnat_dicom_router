@@ -330,24 +330,41 @@ public class DicomRouter implements Callable<Integer> {
                                 projectId = extractProjectId(study);
                             }
 
-                            // Generate subject ID - use honest broker if configured
+                            // Generate subject ID and session label - use honest broker if configured
                             String subjectId;
+                            String sessionLabel;
                             if (routeDest.isUseHonestBroker() && routeDest.getHonestBrokerName() != null && honestBrokerService != null) {
                                 String originalPatientId = extractPatientId(study);
-                                String deidentifiedId = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalPatientId);
-                                if (deidentifiedId != null) {
-                                    subjectId = deidentifiedId;
+                                String deidentifiedPatientId = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalPatientId);
+                                if (deidentifiedPatientId != null) {
+                                    subjectId = deidentifiedPatientId;
                                     log.debug("[{}] Honest broker '{}' mapped patient ID '{}' -> '{}'",
                                             route.getAeTitle(), routeDest.getHonestBrokerName(), originalPatientId, subjectId);
+
+                                    // For remote brokers, also lookup accession number for session label
+                                    // Session format: {deidentifiedPatientId}-{deidentifiedAccessionNumber}
+                                    String originalAccession = extractAccessionNumber(study);
+                                    String deidentifiedAccession = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalAccession);
+                                    if (deidentifiedAccession != null && !"UNKNOWN".equals(originalAccession)) {
+                                        sessionLabel = deidentifiedPatientId + "-" + deidentifiedAccession;
+                                        log.debug("[{}] Honest broker '{}' session label: {} (accession '{}' -> '{}')",
+                                                route.getAeTitle(), routeDest.getHonestBrokerName(), sessionLabel, originalAccession, deidentifiedAccession);
+                                    } else {
+                                        // Fail if accession lookup fails - don't send without proper de-identification
+                                        log.error("[{}] Honest broker '{}' failed to lookup accession '{}' - cannot send without de-identification",
+                                                route.getAeTitle(), routeDest.getHonestBrokerName(), originalAccession);
+                                        throw new RuntimeException("Honest broker accession lookup failed for: " + originalAccession);
+                                    }
                                 } else {
-                                    log.warn("[{}] Honest broker '{}' returned null for patient ID '{}', using fallback",
+                                    // Fail if patient ID lookup fails - don't send without proper de-identification
+                                    log.error("[{}] Honest broker '{}' failed to lookup patient ID '{}' - cannot send without de-identification",
                                             route.getAeTitle(), routeDest.getHonestBrokerName(), originalPatientId);
-                                    subjectId = generateSubjectId(study, routeDest.getSubjectPrefix());
+                                    throw new RuntimeException("Honest broker patient ID lookup failed for: " + originalPatientId);
                                 }
                             } else {
                                 subjectId = generateSubjectId(study, routeDest.getSubjectPrefix());
+                                sessionLabel = generateSessionLabel(study, routeDest.getSessionPrefix());
                             }
-                            String sessionLabel = generateSessionLabel(study, routeDest.getSessionPrefix());
 
                             log.info("[{}] Uploading to XNAT {} - Project: {}, Subject: {}, Session: {}, AutoArchive: {}",
                                     route.getAeTitle(), destName, projectId, subjectId, sessionLabel, routeDest.isAutoArchive());
@@ -514,6 +531,22 @@ public class DicomRouter implements Callable<Integer> {
                 return attrs.getString(Tag.PatientID, "UNKNOWN");
             } catch (Exception e) {
                 log.debug("Could not extract patient ID from DICOM: {}", e.getMessage());
+                return "UNKNOWN";
+            }
+        }
+
+        private String extractAccessionNumber(DicomReceiver.ReceivedStudy study) {
+            if (study.getFiles().isEmpty()) {
+                return "UNKNOWN";
+            }
+            try {
+                File firstFile = study.getFiles().get(0);
+                org.dcm4che3.io.DicomInputStream dis = new org.dcm4che3.io.DicomInputStream(firstFile);
+                Attributes attrs = dis.readDataset();
+                dis.close();
+                return attrs.getString(Tag.AccessionNumber, "UNKNOWN");
+            } catch (Exception e) {
+                log.debug("Could not extract accession number from DICOM: {}", e.getMessage());
                 return "UNKNOWN";
             }
         }
@@ -1435,22 +1468,38 @@ public class DicomRouter implements Callable<Integer> {
                                 projectId = "IMPORTED";
                             }
 
-                            // Generate subject ID - use honest broker if configured
+                            // Generate subject ID and session label - use honest broker if configured
                             String subjectId;
+                            String sessionLabel;
                             if (routeDest.isUseHonestBroker() && routeDest.getHonestBrokerName() != null && honestBrokerService != null) {
                                 String originalPatientId = extractPatientIdFromFiles(study.getFiles());
-                                String deidentifiedId = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalPatientId);
-                                if (deidentifiedId != null) {
-                                    subjectId = deidentifiedId;
+                                String deidentifiedPatientId = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalPatientId);
+                                if (deidentifiedPatientId != null) {
+                                    subjectId = deidentifiedPatientId;
+
+                                    // For remote brokers, also lookup accession number for session label
+                                    // Session format: {deidentifiedPatientId}-{deidentifiedAccessionNumber}
+                                    String originalAccession = extractAccessionNumberFromFiles(study.getFiles());
+                                    String deidentifiedAccession = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalAccession);
+                                    if (deidentifiedAccession != null && !"UNKNOWN".equals(originalAccession)) {
+                                        sessionLabel = deidentifiedPatientId + "-" + deidentifiedAccession;
+                                    } else {
+                                        // Fail if accession lookup fails - don't send without proper de-identification
+                                        log.error("[IMPORT] Honest broker '{}' failed to lookup accession '{}' - cannot send without de-identification",
+                                                routeDest.getHonestBrokerName(), originalAccession);
+                                        throw new RuntimeException("Honest broker accession lookup failed for: " + originalAccession);
+                                    }
                                 } else {
-                                    subjectId = routeDest.getSubjectPrefix() + "_" + study.getStudyUid().substring(Math.max(0, study.getStudyUid().length() - 8));
+                                    // Fail if patient ID lookup fails - don't send without proper de-identification
+                                    log.error("[IMPORT] Honest broker '{}' failed to lookup patient ID '{}' - cannot send without de-identification",
+                                            routeDest.getHonestBrokerName(), originalPatientId);
+                                    throw new RuntimeException("Honest broker patient ID lookup failed for: " + originalPatientId);
                                 }
                             } else {
                                 subjectId = generateSubjectIdFromFiles(study.getFiles(), routeDest.getSubjectPrefix());
+                                sessionLabel = routeDest.getSessionPrefix() + LocalDate.now().toString().replace("-", "") +
+                                        "_" + study.getStudyUid().substring(Math.max(0, study.getStudyUid().length() - 8));
                             }
-
-                            String sessionLabel = routeDest.getSessionPrefix() + LocalDate.now().toString().replace("-", "") +
-                                    "_" + study.getStudyUid().substring(Math.max(0, study.getStudyUid().length() - 8));
 
                             io.xnatworks.router.xnat.XnatClient.UploadResult result = client.uploadWithRetry(
                                     zipFile, projectId, subjectId, sessionLabel,
@@ -1525,6 +1574,16 @@ public class DicomRouter implements Callable<Integer> {
             try (org.dcm4che3.io.DicomInputStream dis = new org.dcm4che3.io.DicomInputStream(files.get(0))) {
                 Attributes attrs = dis.readDataset();
                 return attrs.getString(Tag.PatientID, "UNKNOWN");
+            } catch (IOException e) {
+                return "UNKNOWN";
+            }
+        }
+
+        private String extractAccessionNumberFromFiles(List<File> files) {
+            if (files.isEmpty()) return "UNKNOWN";
+            try (org.dcm4che3.io.DicomInputStream dis = new org.dcm4che3.io.DicomInputStream(files.get(0))) {
+                Attributes attrs = dis.readDataset();
+                return attrs.getString(Tag.AccessionNumber, "UNKNOWN");
             } catch (IOException e) {
                 return "UNKNOWN";
             }
