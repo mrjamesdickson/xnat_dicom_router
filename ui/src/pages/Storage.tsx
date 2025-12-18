@@ -19,6 +19,7 @@ interface RouteStorage {
   processing: number
   completed: number
   failed: number
+  deleted: number
   totalSize: string
   totalSizeBytes: number
 }
@@ -55,6 +56,7 @@ interface RouteStorageDetail {
   processing: DirectoryListing
   completed: DirectoryListing
   failed: DirectoryListing
+  deleted: DirectoryListing
   logs: DirectoryListing
 }
 
@@ -225,12 +227,59 @@ export default function Storage() {
     }
   }
 
+  const handleRemoveAllStorage = async (route: string) => {
+    // Confirmation for soft delete (moves to deleted folder)
+    if (!confirm(`Move ALL storage for route "${route}" to the deleted folder?\n\nThis includes:\n- All incoming studies\n- All processing studies\n- All completed studies\n- All failed studies\n\nStudies will be moved to the 'deleted' folder and can be purged later.`)) {
+      return
+    }
+
+    setActionInProgress(`remove-all-${route}`)
+    try {
+      const result = await apiDelete(`/storage/routes/${route}/all`)
+      const data = result as { totalFilesMoved: number; totalSizeMoved: string; movedDirectories: string[] }
+      alert(`Storage moved to deleted folder for route: ${route}\n\n- Files moved: ${data.totalFilesMoved}\n- Size: ${data.totalSizeMoved}\n- Directories cleared: ${data.movedDirectories.join(', ')}`)
+      refetchRoute()
+      refetch()
+    } catch (err) {
+      alert('Failed to remove storage: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    } finally {
+      setActionInProgress(null)
+    }
+  }
+
+  const handlePurgeDeleted = async (route: string) => {
+    // Strong confirmation for permanent deletion
+    if (!confirm(`WARNING: This will PERMANENTLY DELETE all items in the deleted folder for route "${route}"!\n\nThis action CANNOT be undone.`)) {
+      return
+    }
+
+    const confirmation = prompt(`Type "PURGE ${route}" to confirm permanent deletion:`)
+    if (confirmation !== `PURGE ${route}`) {
+      alert('Purge cancelled - confirmation text did not match.')
+      return
+    }
+
+    setActionInProgress(`purge-${route}`)
+    try {
+      const result = await apiDelete(`/storage/routes/${route}/deleted/purge`)
+      const data = result as { filesPurged: number; sizePurged: string }
+      alert(`Deleted folder purged for route: ${route}\n\n- Files purged: ${data.filesPurged}\n- Space freed: ${data.sizePurged}`)
+      refetchRoute()
+      refetch()
+    } catch (err) {
+      alert('Failed to purge deleted folder: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    } finally {
+      setActionInProgress(null)
+    }
+  }
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'incoming': return 'var(--primary-color)'
       case 'processing': return 'var(--warning-color)'
       case 'completed': return 'var(--success-color)'
       case 'failed': return 'var(--danger-color)'
+      case 'deleted': return '#999'
       default: return 'inherit'
     }
   }
@@ -903,6 +952,60 @@ export default function Storage() {
       )
     }
 
+    const renderDeletedDirectory = (dir: DirectoryListing) => {
+      if (!dir || !dir.exists) return null
+
+      return (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.5rem' }}>
+            <h3 style={{ color: '#999', margin: 0 }}>
+              Deleted ({dir.itemCount})
+            </h3>
+            {dir.itemCount > 0 && (
+              <button
+                className="btn btn-danger"
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
+                onClick={() => handlePurgeDeleted(selectedRoute!)}
+                disabled={actionInProgress !== null}
+              >
+                {actionInProgress === `purge-${selectedRoute}` ? 'Purging...' : 'Purge All'}
+              </button>
+            )}
+          </div>
+          {dir.items.length > 0 ? (
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Folder</th>
+                    <th>Files</th>
+                    <th>Size</th>
+                    <th>Modified</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dir.items.filter(item => item.isDirectory).map(item => (
+                    <tr key={item.name} style={{ opacity: 0.7 }}>
+                      <td>
+                        <code style={{ fontSize: '0.75rem' }}>
+                          {item.name.length > 40 ? item.name.substring(0, 40) + '...' : item.name}
+                        </code>
+                      </td>
+                      <td>{item.fileCount || 0}</td>
+                      <td>{item.totalSizeFormatted || item.sizeFormatted}</td>
+                      <td>{item.modified}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ color: 'var(--text-light)', fontStyle: 'italic' }}>Empty (no deleted items)</div>
+          )}
+        </div>
+      )
+    }
+
     const renderLogsDirectory = (dir: DirectoryListing) => {
       if (!dir.exists) return null
 
@@ -958,6 +1061,13 @@ export default function Storage() {
                 <button className="btn btn-primary" onClick={() => openUploadModal(selectedRoute)}>
                   Upload Data
                 </button>
+                <button
+                  className="btn btn-danger"
+                  onClick={() => handleRemoveAllStorage(selectedRoute)}
+                  disabled={actionInProgress !== null}
+                >
+                  {actionInProgress === `remove-all-${selectedRoute}` ? 'Removing...' : 'Remove All'}
+                </button>
                 <button className="btn btn-secondary" onClick={() => refetchRoute()}>
                   Refresh
                 </button>
@@ -975,6 +1085,7 @@ export default function Storage() {
             {renderDirectory('processing', routeDetail.processing, 'processing')}
             {renderDirectory('completed', routeDetail.completed, 'completed')}
             {renderDirectory('failed', routeDetail.failed, 'failed')}
+            {renderDeletedDirectory(routeDetail.deleted)}
             {renderLogsDirectory(routeDetail.logs)}
           </div>
         </div>
@@ -1033,6 +1144,7 @@ export default function Storage() {
                 <th style={{ color: 'var(--warning-color)' }}>Processing</th>
                 <th style={{ color: 'var(--success-color)' }}>Completed</th>
                 <th style={{ color: 'var(--danger-color)' }}>Failed</th>
+                <th style={{ color: '#999' }}>Deleted</th>
                 <th>Total Size</th>
                 <th>Actions</th>
               </tr>
@@ -1052,6 +1164,9 @@ export default function Storage() {
                   </td>
                   <td style={{ color: route.failed > 0 ? 'var(--danger-color)' : 'inherit' }}>
                     {route.failed}
+                  </td>
+                  <td style={{ color: route.deleted > 0 ? '#999' : 'inherit' }}>
+                    {route.deleted || 0}
                   </td>
                   <td>{route.totalSize}</td>
                   <td>
@@ -1076,7 +1191,7 @@ export default function Storage() {
               ))}
               {(!overview?.routes || overview.routes.length === 0) && (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-light)' }}>
+                  <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-light)' }}>
                     No route storage found
                   </td>
                 </tr>

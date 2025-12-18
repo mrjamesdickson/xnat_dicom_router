@@ -27,11 +27,13 @@ public class StorageCleanupService implements AutoCloseable {
 
     private final Path dataDir;
     private final int retentionDays;
+    private final int deletedRetentionDays;
     private final ScheduledExecutorService scheduler;
 
     public StorageCleanupService(AppConfig config) {
         this.dataDir = Paths.get(config.getDataDirectory());
         this.retentionDays = config.getResilience().getRetentionDays();
+        this.deletedRetentionDays = config.getResilience().getDeletedRetentionDays();
 
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "storage-cleanup");
@@ -45,7 +47,8 @@ public class StorageCleanupService implements AutoCloseable {
      * Runs immediately on startup, then daily at midnight.
      */
     public void start() {
-        log.info("Starting storage cleanup service (retention: {} days)", retentionDays);
+        log.info("Starting storage cleanup service (retention: {} days, deleted: {} days)",
+                retentionDays, deletedRetentionDays < 0 ? "disabled" : deletedRetentionDays);
 
         // Run immediately, then every 24 hours
         scheduler.scheduleAtFixedRate(this::runCleanup, 0, 24, TimeUnit.HOURS);
@@ -64,8 +67,13 @@ public class StorageCleanupService implements AutoCloseable {
             }
 
             Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
+            Instant deletedCutoff = deletedRetentionDays >= 0
+                    ? Instant.now().minus(deletedRetentionDays, ChronoUnit.DAYS)
+                    : null; // null means disabled
+
             int completedDeleted = 0;
             int failedDeleted = 0;
+            int softDeletedPermanentlyDeleted = 0;
             int historyDeleted = 0;
             int logsDeleted = 0;
 
@@ -81,6 +89,11 @@ public class StorageCleanupService implements AutoCloseable {
                     // Clean failed folders (older than retention)
                     failedDeleted += cleanOldStudyFolders(aeDir.resolve("failed"), cutoff);
 
+                    // Clean deleted folders (soft-deleted studies, uses separate retention period)
+                    if (deletedCutoff != null) {
+                        softDeletedPermanentlyDeleted += cleanOldStudyFolders(aeDir.resolve("deleted"), deletedCutoff);
+                    }
+
                     // Clean old history JSON files
                     historyDeleted += cleanOldFiles(aeDir.resolve("history"), cutoff, "*.json");
 
@@ -89,8 +102,8 @@ public class StorageCleanupService implements AutoCloseable {
                 }
             }
 
-            log.info("Storage cleanup completed: {} completed, {} failed, {} history, {} logs deleted",
-                    completedDeleted, failedDeleted, historyDeleted, logsDeleted);
+            log.info("Storage cleanup completed: {} completed, {} failed, {} deleted, {} history, {} logs removed",
+                    completedDeleted, failedDeleted, softDeletedPermanentlyDeleted, historyDeleted, logsDeleted);
 
         } catch (Exception e) {
             log.error("Storage cleanup failed: {}", e.getMessage(), e);

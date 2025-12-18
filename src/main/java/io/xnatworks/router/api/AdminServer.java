@@ -128,6 +128,7 @@ public class AdminServer {
         final MetricsResource metricsResource = metricsCollector != null ? new MetricsResource(metricsCollector) : null;
         final SearchResource searchResource = (routerStore != null && dicomIndexer != null)
                 ? new SearchResource(config, routerStore, dicomIndexer) : null;
+        final AuditResource auditResource = new AuditResource(scriptLibrary, java.nio.file.Paths.get(config.getDataDirectory()));
         final AuthFilter authFilter = new AuthFilter(config);
 
         ResourceConfig resourceConfig = new ResourceConfig();
@@ -155,6 +156,7 @@ public class AdminServer {
                 if (searchResource != null) {
                     bind(searchResource).to(SearchResource.class);
                 }
+                bind(auditResource).to(AuditResource.class);
             }
         });
 
@@ -178,6 +180,7 @@ public class AdminServer {
         if (searchResource != null) {
             resourceConfig.register(SearchResource.class);
         }
+        resourceConfig.register(AuditResource.class);
 
         // Register auth filter
         resourceConfig.register(authFilter);

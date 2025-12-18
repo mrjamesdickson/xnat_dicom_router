@@ -1304,6 +1304,14 @@ public class AppConfig {
         @JsonProperty("retention_days")
         private int retentionDays = 30;
 
+        /**
+         * Retention period in days for deleted (soft-deleted) study folders.
+         * Default is 7 days - deleted studies are permanently removed after this period.
+         * Set to -1 to disable automatic cleanup of deleted folders.
+         */
+        @JsonProperty("deleted_retention_days")
+        private int deletedRetentionDays = 7;
+
         public int getHealthCheckInterval() { return healthCheckInterval; }
         public void setHealthCheckInterval(int healthCheckInterval) { this.healthCheckInterval = healthCheckInterval; }
 
@@ -1318,6 +1326,9 @@ public class AppConfig {
 
         public int getRetentionDays() { return retentionDays; }
         public void setRetentionDays(int retentionDays) { this.retentionDays = retentionDays; }
+
+        public int getDeletedRetentionDays() { return deletedRetentionDays; }
+        public void setDeletedRetentionDays(int deletedRetentionDays) { this.deletedRetentionDays = deletedRetentionDays; }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

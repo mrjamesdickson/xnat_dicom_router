@@ -7,6 +7,7 @@
  */
 package io.xnatworks.router;
 
+import io.xnatworks.router.anon.AnonymizationService;
 import io.xnatworks.router.anon.ScriptLibrary;
 import io.xnatworks.router.broker.HonestBrokerService;
 import io.xnatworks.router.config.AppConfig;
@@ -491,8 +492,60 @@ public class DicomRouter implements Callable<Integer> {
                                          ScriptLibrary scriptLibrary, String anonScriptName) throws IOException {
             Path tempZip = Files.createTempFile("dicom_upload_", ".zip");
 
+            // Determine which files to zip - original or anonymized
+            List<File> filesToZip = study.getFiles();
+
+            // Apply anonymization if enabled
+            if (anonymize && scriptLibrary != null && anonScriptName != null && !anonScriptName.equals("passthrough")) {
+                Path tempDir = Files.createTempDirectory("anon_temp_");
+                Path anonDir = Files.createTempDirectory("anon_output_");
+
+                try {
+                    // Copy source files to temp directory
+                    for (File file : study.getFiles()) {
+                        Files.copy(file.toPath(), tempDir.resolve(file.getName()), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    }
+
+                    // Get the script content
+                    String scriptContent = scriptLibrary.getScriptContent(anonScriptName);
+                    if (scriptContent != null) {
+                        AnonymizationService anonService = new AnonymizationService(scriptLibrary);
+                        AnonymizationService.AnonymizationResult result = anonService.anonymizeWithScript(
+                                tempDir, anonDir, scriptContent
+                        );
+
+                        if (result.isSuccess() && result.getOutputFiles() > 0) {
+                            // Use anonymized files instead
+                            List<File> anonFiles = new java.util.ArrayList<>();
+                            try (java.util.stream.Stream<Path> paths = Files.list(anonDir)) {
+                                paths.filter(Files::isRegularFile)
+                                     .forEach(p -> anonFiles.add(p.toFile()));
+                            }
+                            filesToZip = anonFiles;
+                            log.info("Anonymized {} files using script '{}'", result.getOutputFiles(), anonScriptName);
+                        } else {
+                            log.warn("Anonymization produced no output files, using original files. Script: {}", anonScriptName);
+                        }
+                    } else {
+                        log.warn("Script '{}' not found in library, using original files", anonScriptName);
+                    }
+                } catch (Exception e) {
+                    log.error("Anonymization failed, using original files: {}", e.getMessage(), e);
+                    // Cleanup temp dirs on error
+                    try {
+                        Files.walk(tempDir).sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                            try { Files.deleteIfExists(p); } catch (IOException ignored) {}
+                        });
+                        Files.walk(anonDir).sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                            try { Files.deleteIfExists(p); } catch (IOException ignored) {}
+                        });
+                    } catch (IOException ignored) {}
+                }
+            }
+
+            // Create ZIP from files (either original or anonymized)
             try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(Files.newOutputStream(tempZip))) {
-                for (File file : study.getFiles()) {
+                for (File file : filesToZip) {
                     java.util.zip.ZipEntry entry = new java.util.zip.ZipEntry(file.getName());
                     zos.putNextEntry(entry);
                     Files.copy(file.toPath(), zos);

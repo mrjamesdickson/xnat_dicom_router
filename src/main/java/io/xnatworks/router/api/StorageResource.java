@@ -109,6 +109,7 @@ public class StorageResource {
                           routeInfo.put("processing", countFilesInDir(routePath.resolve("processing")));
                           routeInfo.put("completed", countFilesInDir(routePath.resolve("completed")));
                           routeInfo.put("failed", countFilesInDir(routePath.resolve("failed")));
+                          routeInfo.put("deleted", countFilesInDir(routePath.resolve("deleted")));
 
                           // Get disk usage
                           routeInfo.put("totalSize", formatSize(getDirSize(routePath)));
@@ -160,7 +161,7 @@ public class StorageResource {
         result.put("path", routePath.toString());
 
         // List all subdirectories and their contents
-        for (String subDir : Arrays.asList("incoming", "processing", "completed", "failed", "logs")) {
+        for (String subDir : Arrays.asList("incoming", "processing", "completed", "failed", "deleted", "logs")) {
             Path subPath = routePath.resolve(subDir);
             if (Files.exists(subPath)) {
                 result.put(subDir, listDirectory(subPath, true));
@@ -749,6 +750,226 @@ public class StorageResource {
         result.put("message", String.format("Moved %d failed studies for retry (%d skipped, %d errors)",
                 moved.size(), skipped.size(), errors.size()));
 
+        return Response.ok(result).build();
+    }
+
+    /**
+     * Move all storage for a route to the 'deleted' folder (soft delete).
+     * Studies in the deleted folder can be purged later via retention policy.
+     */
+    @DELETE
+    @jakarta.ws.rs.Path("/routes/{routeName}/all")
+    public Response deleteAllStorage(@PathParam("routeName") String routeName) {
+        Path routePath = Paths.get(config.getDataDirectory(), routeName);
+
+        if (!Files.exists(routePath)) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "Route storage not found: " + routeName))
+                    .build();
+        }
+
+        // Create deleted directory if it doesn't exist
+        Path deletedDir = routePath.resolve("deleted");
+        try {
+            Files.createDirectories(deletedDir);
+        } catch (IOException e) {
+            log.error("Failed to create deleted directory: {}", e.getMessage());
+            return Response.serverError()
+                    .entity(Map.of("error", "Failed to create deleted directory: " + e.getMessage()))
+                    .build();
+        }
+
+        List<String> movedDirs = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        long totalFilesMoved = 0;
+        long totalBytesMoved = 0;
+
+        // Move contents of each subdirectory to deleted folder
+        for (String subDir : Arrays.asList("incoming", "processing", "completed", "failed")) {
+            Path subPath = routePath.resolve(subDir);
+            if (Files.exists(subPath)) {
+                try {
+                    long fileCount = countFilesInDir(subPath);
+                    long dirSize = getDirSize(subPath);
+
+                    // Move all study folders to deleted directory (with timestamp prefix to avoid conflicts)
+                    String timestamp = java.time.LocalDateTime.now().format(
+                            java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+
+                    try (Stream<Path> stream = Files.list(subPath)) {
+                        stream.filter(Files::isDirectory)
+                              .forEach(studyPath -> {
+                                  String studyName = studyPath.getFileName().toString();
+                                  // Prefix with source folder and timestamp to avoid collisions
+                                  String deletedName = subDir + "_" + timestamp + "_" + studyName;
+                                  Path targetPath = deletedDir.resolve(deletedName);
+
+                                  try {
+                                      Files.move(studyPath, targetPath, StandardCopyOption.ATOMIC_MOVE);
+                                      log.debug("Moved {} to deleted: {}", studyPath, targetPath);
+                                  } catch (IOException e) {
+                                      log.error("Error moving {} to deleted: {}", studyPath, e.getMessage());
+                                  }
+                              });
+                    }
+
+                    totalFilesMoved += fileCount;
+                    totalBytesMoved += dirSize;
+                    movedDirs.add(subDir + " (" + fileCount + " files, " + formatSize(dirSize) + ")");
+                    log.info("Moved {}/{} to deleted: {} files, {}", routeName, subDir, fileCount, formatSize(dirSize));
+                } catch (IOException e) {
+                    errors.add(subDir + ": " + e.getMessage());
+                    log.error("Error moving {}/{} to deleted: {}", routeName, subDir, e.getMessage());
+                }
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("message", "Storage moved to deleted for route: " + routeName);
+        result.put("route", routeName);
+        result.put("totalFilesMoved", totalFilesMoved);
+        result.put("totalBytesMoved", totalBytesMoved);
+        result.put("totalSizeMoved", formatSize(totalBytesMoved));
+        result.put("movedDirectories", movedDirs);
+        result.put("deletedFolder", deletedDir.toString());
+        if (!errors.isEmpty()) {
+            result.put("errors", errors);
+        }
+
+        log.info("Moved all storage for route {} to deleted: {} files, {}", routeName, totalFilesMoved, formatSize(totalBytesMoved));
+        return Response.ok(result).build();
+    }
+
+    /**
+     * Permanently purge all data from the deleted folder for a route.
+     * This is a truly destructive operation.
+     */
+    @DELETE
+    @jakarta.ws.rs.Path("/routes/{routeName}/deleted/purge")
+    public Response purgeDeletedStorage(@PathParam("routeName") String routeName) {
+        Path deletedDir = Paths.get(config.getDataDirectory(), routeName, "deleted");
+
+        if (!Files.exists(deletedDir)) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "Deleted folder not found for route: " + routeName))
+                    .build();
+        }
+
+        long fileCount = countFilesInDir(deletedDir);
+        long dirSize = getDirSize(deletedDir);
+
+        try {
+            // Delete all contents of the deleted folder
+            try (Stream<Path> stream = Files.list(deletedDir)) {
+                stream.forEach(path -> {
+                    try {
+                        if (Files.isDirectory(path)) {
+                            Files.walk(path)
+                                 .sorted(Comparator.reverseOrder())
+                                 .forEach(p -> {
+                                     try {
+                                         Files.delete(p);
+                                     } catch (IOException e) {
+                                         log.error("Error purging {}: {}", p, e.getMessage());
+                                     }
+                                 });
+                        } else {
+                            Files.delete(path);
+                        }
+                    } catch (IOException e) {
+                        log.error("Error purging {}: {}", path, e.getMessage());
+                    }
+                });
+            }
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("message", "Deleted folder purged for route: " + routeName);
+            result.put("route", routeName);
+            result.put("filesPurged", fileCount);
+            result.put("sizePurged", formatSize(dirSize));
+
+            log.info("Purged deleted folder for route {}: {} files, {}", routeName, fileCount, formatSize(dirSize));
+            return Response.ok(result).build();
+        } catch (IOException e) {
+            log.error("Error purging deleted folder: {}", e.getMessage());
+            return Response.serverError()
+                    .entity(Map.of("error", "Failed to purge deleted folder: " + e.getMessage()))
+                    .build();
+        }
+    }
+
+    /**
+     * Purge old items from deleted folder based on retention days.
+     * Items older than the specified days will be permanently deleted.
+     */
+    @DELETE
+    @jakarta.ws.rs.Path("/routes/{routeName}/deleted/purge-old")
+    public Response purgeOldDeletedStorage(@PathParam("routeName") String routeName,
+                                            @QueryParam("days") @DefaultValue("7") int retentionDays) {
+        Path deletedDir = Paths.get(config.getDataDirectory(), routeName, "deleted");
+
+        if (!Files.exists(deletedDir)) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "Deleted folder not found for route: " + routeName))
+                    .build();
+        }
+
+        java.time.Instant cutoff = java.time.Instant.now().minus(java.time.Duration.ofDays(retentionDays));
+        List<String> purged = new ArrayList<>();
+        List<String> retained = new ArrayList<>();
+        long totalFilesPurged = 0;
+        long totalBytesPurged = 0;
+
+        try (Stream<Path> stream = Files.list(deletedDir)) {
+            List<Path> items = stream.filter(Files::isDirectory).collect(java.util.stream.Collectors.toList());
+
+            for (Path itemPath : items) {
+                try {
+                    BasicFileAttributes attrs = Files.readAttributes(itemPath, BasicFileAttributes.class);
+                    if (attrs.lastModifiedTime().toInstant().isBefore(cutoff)) {
+                        // Old enough to purge
+                        long fileCount = countFilesInDir(itemPath);
+                        long dirSize = getDirSize(itemPath);
+
+                        Files.walk(itemPath)
+                             .sorted(Comparator.reverseOrder())
+                             .forEach(p -> {
+                                 try {
+                                     Files.delete(p);
+                                 } catch (IOException e) {
+                                     log.error("Error purging {}: {}", p, e.getMessage());
+                                 }
+                             });
+
+                        totalFilesPurged += fileCount;
+                        totalBytesPurged += dirSize;
+                        purged.add(itemPath.getFileName().toString());
+                        log.debug("Purged old deleted item: {}", itemPath.getFileName());
+                    } else {
+                        retained.add(itemPath.getFileName().toString());
+                    }
+                } catch (IOException e) {
+                    log.error("Error checking/purging {}: {}", itemPath, e.getMessage());
+                }
+            }
+        } catch (IOException e) {
+            log.error("Error listing deleted folder: {}", e.getMessage());
+            return Response.serverError()
+                    .entity(Map.of("error", "Failed to list deleted folder: " + e.getMessage()))
+                    .build();
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("message", String.format("Purged items older than %d days from deleted folder", retentionDays));
+        result.put("route", routeName);
+        result.put("retentionDays", retentionDays);
+        result.put("itemsPurged", purged.size());
+        result.put("itemsRetained", retained.size());
+        result.put("filesPurged", totalFilesPurged);
+        result.put("sizePurged", formatSize(totalBytesPurged));
+
+        log.info("Purged {} old items from deleted folder for route {} (retention: {} days): {} files, {}",
+                purged.size(), routeName, retentionDays, totalFilesPurged, formatSize(totalBytesPurged));
         return Response.ok(result).build();
     }
 
