@@ -31,8 +31,10 @@ dependencies {
     implementation 'org.dcm4che:dcm4che-imageio:5.31.0'
 
     // DicomEdit for DICOM anonymization (direct library integration)
-    // DicomEdit 6.0.2 uses dcm4che2, so we need that as well
+    // Note: DicomEdit 6.0.2 has an ANTLR lexer bug with 'version "X.X"' syntax
+    // Workaround: Remove or comment out version statements in scripts
     implementation 'org.nrg:DicomEdit:6.0.2'
+    // DicomEdit 6.x uses dcm4che2
     implementation 'dcm4che:dcm4che-core:2.0.29'
     implementation 'dcm4che:dcm4che-net:2.0.29'
     implementation 'dcm4che:dcm4che-filecache:2.0.29'
