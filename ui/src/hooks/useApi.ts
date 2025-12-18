@@ -138,7 +138,7 @@ export async function apiPut<T>(endpoint: string, body: unknown): Promise<T> {
   return response.json()
 }
 
-export async function apiDelete(endpoint: string): Promise<void> {
+export async function apiDelete<T = void>(endpoint: string): Promise<T> {
   const response = await fetch(`${API_BASE}${endpoint}`, {
     method: 'DELETE',
     headers: getHeaders()
@@ -152,6 +152,16 @@ export async function apiDelete(endpoint: string): Promise<void> {
     const error = await response.json().catch(() => ({ error: response.statusText }))
     throw new Error(error.error || `HTTP ${response.status}`)
   }
+  // Return empty object for 204 No Content, otherwise parse JSON
+  if (response.status === 204) {
+    return {} as T
+  }
+  // Try to parse JSON response if available
+  const contentType = response.headers.get('content-type')
+  if (contentType && contentType.includes('application/json')) {
+    return response.json()
+  }
+  return {} as T
 }
 
 export async function checkAuth(): Promise<{ authenticated: boolean; authRequired: boolean; username?: string }> {

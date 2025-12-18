@@ -9,11 +9,14 @@ package io.xnatworks.router;
 
 import io.xnatworks.router.anon.AnonymizationService;
 import io.xnatworks.router.anon.ScriptLibrary;
+import io.xnatworks.router.archive.ArchiveManager;
 import io.xnatworks.router.broker.HonestBrokerService;
 import io.xnatworks.router.config.AppConfig;
 import io.xnatworks.router.dicom.DicomClient;
 import io.xnatworks.router.dicom.DicomReceiver;
 import io.xnatworks.router.metrics.MetricsCollector;
+import io.xnatworks.router.retry.RetryManager;
+import io.xnatworks.router.review.ReviewManager;
 import io.xnatworks.router.routing.DestinationManager;
 import io.xnatworks.router.store.RouterStore;
 import io.xnatworks.router.tracking.TransferTracker;
@@ -117,6 +120,25 @@ public class DicomRouter implements Callable<Integer> {
             TransferTracker transferTracker = new TransferTracker(baseDir);
             DestinationManager destinationManager = new DestinationManager(config);
 
+            // Initialize archive manager for preserving original/anonymized files
+            ArchiveManager archiveManager = new ArchiveManager(baseDir, scriptLibrary);
+
+            // Initialize review manager for human-in-the-loop review workflow
+            ReviewManager reviewManager = new ReviewManager(baseDir, config, archiveManager);
+
+            // Initialize retry manager for smart per-destination retry
+            RetryManager retryManager = new RetryManager(config, archiveManager, destinationManager, transferTracker, baseDir);
+            retryManager.start();
+
+            // Set up review approval callback to trigger forwarding
+            final RetryManager finalRetryManager = retryManager;
+            reviewManager.setApprovalCallback((review, study) -> {
+                log.info("[{}] Review approved for study {}, triggering forwarding",
+                        review.getAeTitle(), review.getStudyUid());
+                // Use RetryManager to forward the study to all destinations
+                finalRetryManager.retryAllFailedDestinations(review.getAeTitle(), review.getStudyUid());
+            });
+
             // Start health checks
             destinationManager.startHealthChecks();
 
@@ -164,18 +186,22 @@ public class DicomRouter implements Callable<Integer> {
             // Start receivers
             List<DicomReceiver> receivers = new ArrayList<>();
             final io.xnatworks.router.index.DicomIndexer indexerForCallback = dicomIndexer;
+            final ArchiveManager archiveManagerForCallback = archiveManager;
+            final ReviewManager reviewManagerForCallback = reviewManager;
             for (AppConfig.RouteConfig route : routesToStart) {
                 DicomReceiver receiver = new DicomReceiver(
                         route,
                         config.getReceiver().getBaseDir(),
                         study -> processStudy(study, route, config, scriptLibrary,
-                                destinationManager, transferTracker, honestBrokerService, indexerForCallback)
+                                destinationManager, transferTracker, honestBrokerService, indexerForCallback,
+                                archiveManagerForCallback, reviewManagerForCallback)
                 );
                 receiver.start();
                 receivers.add(receiver);
 
-                log.info("Started route: {} on port {} ({} destinations)",
-                        route.getAeTitle(), route.getPort(), route.getDestinations().size());
+                log.info("Started route: {} on port {} ({} destinations, review={}, archive={})",
+                        route.getAeTitle(), route.getPort(), route.getDestinations().size(),
+                        route.isRequireReview(), route.isEnableArchive());
             }
 
             // Start admin server if enabled
@@ -231,6 +257,7 @@ public class DicomRouter implements Callable<Integer> {
             final StorageCleanupService finalCleanupService = cleanupService;
             final MetricsCollector finalMetricsCollector = metricsCollector;
             final io.xnatworks.router.index.DicomIndexer finalDicomIndexer = dicomIndexer;
+            final RetryManager finalRetryManagerForShutdown = retryManager;
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 log.info("Shutting down...");
                 receivers.forEach(DicomReceiver::stop);
@@ -238,6 +265,7 @@ public class DicomRouter implements Callable<Integer> {
                 finalCleanupService.close();
                 finalMetricsCollector.stop();
                 finalDicomIndexer.shutdown();
+                finalRetryManagerForShutdown.close();
                 if (finalAdminServer != null) {
                     try {
                         finalAdminServer.stop();
@@ -259,7 +287,9 @@ public class DicomRouter implements Callable<Integer> {
                                   DestinationManager destinationManager,
                                   TransferTracker transferTracker,
                                   HonestBrokerService honestBrokerService,
-                                  io.xnatworks.router.index.DicomIndexer dicomIndexer) {
+                                  io.xnatworks.router.index.DicomIndexer dicomIndexer,
+                                  ArchiveManager archiveManager,
+                                  ReviewManager reviewManager) {
             log.info("[{}] Processing study: {} ({} files)",
                     route.getAeTitle(), study.getStudyUid(), study.getFileCount());
 
@@ -275,6 +305,106 @@ public class DicomRouter implements Callable<Integer> {
 
             // Mark as processing
             transferTracker.startProcessing(transferId);
+
+            // Archive original files if archiving is enabled for this route
+            if (route.isEnableArchive()) {
+                try {
+                    Path studyDir = study.getStudyDir();
+                    archiveManager.archiveOriginal(route.getAeTitle(), study.getStudyUid(),
+                            studyDir, study.getCallingAeTitle());
+                    log.debug("[{}] Archived original files for study {}", route.getAeTitle(), study.getStudyUid());
+                } catch (IOException e) {
+                    log.error("[{}] Failed to archive original files for study {}: {}",
+                            route.getAeTitle(), study.getStudyUid(), e.getMessage(), e);
+                    // Continue processing - archiving failure shouldn't block forwarding
+                }
+            }
+
+            // Check if this route requires review before forwarding
+            // If so, perform pre-processing (anonymization) and submit for review
+            if (route.isRequireReview() && route.isEnableArchive() && reviewManager != null) {
+                boolean hasAnonymization = route.getDestinations().stream()
+                        .anyMatch(d -> d.isEnabled() && d.isAnonymize());
+
+                if (hasAnonymization) {
+                    log.info("[{}] Route requires review - performing pre-processing for study {}",
+                            route.getAeTitle(), study.getStudyUid());
+
+                    try {
+                        // Find the first enabled destination with anonymization to get script name
+                        AppConfig.RouteDestination anonDest = route.getDestinations().stream()
+                                .filter(d -> d.isEnabled() && d.isAnonymize())
+                                .findFirst()
+                                .orElse(null);
+
+                        if (anonDest != null) {
+                            String anonScriptName = anonDest.getEffectiveAnonScript();
+
+                            // Perform anonymization and archive
+                            ZipCreationResult zipResult = createZipFromStudy(study, true,
+                                    scriptLibrary, anonScriptName, route, archiveManager);
+
+                            // Clean up temp ZIP - we don't need it yet, archived files will be used later
+                            if (zipResult.zipFile.exists()) {
+                                zipResult.zipFile.delete();
+                            }
+
+                            // Get PHI fields count from audit report
+                            int phiFieldsModified = 0;
+                            List<String> warnings = new ArrayList<>();
+                            try {
+                                ArchiveManager.ArchivedStudy archived = archiveManager.getArchivedStudy(
+                                        route.getAeTitle(), study.getStudyUid());
+                                if (archived != null && archived.getAuditReport() != null) {
+                                    phiFieldsModified = archived.getAuditReport().getPhiFieldsModified();
+                                }
+                            } catch (Exception e) {
+                                log.debug("Could not get PHI fields count: {}", e.getMessage());
+                            }
+
+                            // Submit for review
+                            String reviewId = reviewManager.submitForReview(
+                                    route.getAeTitle(),
+                                    study.getStudyUid(),
+                                    anonScriptName,
+                                    phiFieldsModified,
+                                    warnings
+                            );
+
+                            log.info("[{}] Study {} submitted for review (ID: {}). Forwarding paused until approved.",
+                                    route.getAeTitle(), study.getStudyUid(), reviewId);
+
+                            // Initialize destination statuses as PENDING in archive
+                            for (AppConfig.RouteDestination routeDest : route.getDestinations()) {
+                                if (routeDest.isEnabled()) {
+                                    ArchiveManager.DestinationStatus destStatus = new ArchiveManager.DestinationStatus();
+                                    destStatus.setDestination(routeDest.getDestination());
+                                    destStatus.setStatus(ArchiveManager.DestinationStatusEnum.PENDING);
+                                    destStatus.setMessage("Awaiting review approval");
+                                    archiveManager.saveDestinationStatus(route.getAeTitle(), study.getStudyUid(),
+                                            routeDest.getDestination(), destStatus);
+                                }
+                            }
+
+                            // Move to pending_review folder (not completed/failed)
+                            moveStudyToPendingReview(study, route);
+
+                            // Mark transfer as processing/pending review
+                            transferTracker.startForwarding(transferId, route.getDestinations().stream()
+                                    .filter(AppConfig.RouteDestination::isEnabled)
+                                    .map(AppConfig.RouteDestination::getDestination)
+                                    .collect(java.util.stream.Collectors.toList()));
+
+                            log.info("[{}] Transfer {} pending review", route.getAeTitle(), transferId);
+                            return; // Don't proceed with forwarding - wait for review approval
+                        }
+                    } catch (Exception e) {
+                        log.error("[{}] Failed to submit study {} for review: {}",
+                                route.getAeTitle(), study.getStudyUid(), e.getMessage(), e);
+                        // Fall through to normal processing if review submission fails
+                    }
+                }
+            }
 
             // Process each destination
             boolean allSuccess = true;
@@ -321,8 +451,10 @@ public class DicomRouter implements Callable<Integer> {
                             throw new RuntimeException("XNAT destination unavailable: " + destName);
                         }
 
-                        // Create ZIP file from DICOM files
-                        File zipFile = createZipFromStudy(study, routeDest.isAnonymize(), scriptLibrary, routeDest.getEffectiveAnonScript());
+                        // Create ZIP file from DICOM files (with archiving if enabled)
+                        ZipCreationResult zipResult = createZipFromStudy(study, routeDest.isAnonymize(),
+                                scriptLibrary, routeDest.getEffectiveAnonScript(), route, archiveManager);
+                        File zipFile = zipResult.zipFile;
 
                         try {
                             // Get project, subject, session info
@@ -447,6 +579,27 @@ public class DicomRouter implements Callable<Integer> {
                             TransferTracker.DestinationStatus.FAILED;
                     transferTracker.updateDestinationResult(transferId, destName, destStatus, message, duration, filesTransferred);
 
+                    // Save destination status to archive for retry/audit purposes
+                    if (route.isEnableArchive() && archiveManager != null) {
+                        try {
+                            ArchiveManager.DestinationStatus archiveDestStatus = new ArchiveManager.DestinationStatus();
+                            archiveDestStatus.setDestination(destName);
+                            archiveDestStatus.setStatus(success ?
+                                    ArchiveManager.DestinationStatusEnum.SUCCESS :
+                                    ArchiveManager.DestinationStatusEnum.FAILED);
+                            archiveDestStatus.setMessage(message);
+                            archiveDestStatus.setAttempts(1);
+                            archiveDestStatus.setLastAttemptAt(java.time.LocalDateTime.now());
+                            archiveDestStatus.setDurationMs(duration);
+                            archiveDestStatus.setFilesTransferred(filesTransferred);
+                            archiveManager.saveDestinationStatus(route.getAeTitle(), study.getStudyUid(),
+                                    destName, archiveDestStatus);
+                        } catch (Exception archiveEx) {
+                            log.warn("[{}] Failed to save destination status to archive: {}",
+                                    route.getAeTitle(), archiveEx.getMessage());
+                        }
+                    }
+
                     if (success) {
                         anySuccess = true;
                     } else {
@@ -457,6 +610,25 @@ public class DicomRouter implements Callable<Integer> {
                     log.error("[{}] Error forwarding to {}: {}", route.getAeTitle(), destName, e.getMessage(), e);
                     transferTracker.updateDestinationResult(transferId, destName,
                             TransferTracker.DestinationStatus.FAILED, e.getMessage(), 0, 0);
+
+                    // Save failed destination status to archive
+                    if (route.isEnableArchive() && archiveManager != null) {
+                        try {
+                            ArchiveManager.DestinationStatus archiveDestStatus = new ArchiveManager.DestinationStatus();
+                            archiveDestStatus.setDestination(destName);
+                            archiveDestStatus.setStatus(ArchiveManager.DestinationStatusEnum.FAILED);
+                            archiveDestStatus.setMessage(e.getMessage());
+                            archiveDestStatus.setErrorDetails(e.getClass().getName() + ": " + e.getMessage());
+                            archiveDestStatus.setAttempts(1);
+                            archiveDestStatus.setLastAttemptAt(java.time.LocalDateTime.now());
+                            archiveManager.saveDestinationStatus(route.getAeTitle(), study.getStudyUid(),
+                                    destName, archiveDestStatus);
+                        } catch (Exception archiveEx) {
+                            log.warn("[{}] Failed to save destination status to archive: {}",
+                                    route.getAeTitle(), archiveEx.getMessage());
+                        }
+                    }
+
                     allSuccess = false;
                 }
             }
@@ -488,12 +660,33 @@ public class DicomRouter implements Callable<Integer> {
             }
         }
 
-        private File createZipFromStudy(DicomReceiver.ReceivedStudy study, boolean anonymize,
-                                         ScriptLibrary scriptLibrary, String anonScriptName) throws IOException {
+        /**
+         * Result holder for createZipFromStudy containing the ZIP file and anonymization details.
+         */
+        private static class ZipCreationResult {
+            final File zipFile;
+            final boolean wasAnonymized;
+            final String scriptUsed;
+            final Path anonymizedDir; // May be null if not anonymized or cleanup failed
+
+            ZipCreationResult(File zipFile, boolean wasAnonymized, String scriptUsed, Path anonymizedDir) {
+                this.zipFile = zipFile;
+                this.wasAnonymized = wasAnonymized;
+                this.scriptUsed = scriptUsed;
+                this.anonymizedDir = anonymizedDir;
+            }
+        }
+
+        private ZipCreationResult createZipFromStudy(DicomReceiver.ReceivedStudy study, boolean anonymize,
+                                         ScriptLibrary scriptLibrary, String anonScriptName,
+                                         AppConfig.RouteConfig route, ArchiveManager archiveManager) throws IOException {
             Path tempZip = Files.createTempFile("dicom_upload_", ".zip");
 
             // Determine which files to zip - original or anonymized
             List<File> filesToZip = study.getFiles();
+            boolean wasAnonymized = false;
+            String scriptUsed = null;
+            Path anonymizedDir = null;
 
             // Apply anonymization if enabled
             if (anonymize && scriptLibrary != null && anonScriptName != null && !anonScriptName.equals("passthrough")) {
@@ -522,13 +715,47 @@ public class DicomRouter implements Callable<Integer> {
                                      .forEach(p -> anonFiles.add(p.toFile()));
                             }
                             filesToZip = anonFiles;
+                            wasAnonymized = true;
+                            scriptUsed = anonScriptName;
+                            anonymizedDir = anonDir;
                             log.info("Anonymized {} files using script '{}'", result.getOutputFiles(), anonScriptName);
+
+                            // Archive anonymized files if enabled
+                            if (route.isEnableArchive() && archiveManager != null) {
+                                try {
+                                    archiveManager.archiveAnonymized(route.getAeTitle(), study.getStudyUid(),
+                                            anonDir, anonScriptName);
+                                    log.debug("[{}] Archived anonymized files for study {}",
+                                            route.getAeTitle(), study.getStudyUid());
+
+                                    // Generate audit report comparing original vs anonymized
+                                    try {
+                                        archiveManager.generateAuditReport(route.getAeTitle(),
+                                                study.getStudyUid(), anonScriptName);
+                                        log.debug("[{}] Generated audit report for study {}",
+                                                route.getAeTitle(), study.getStudyUid());
+                                    } catch (Exception e) {
+                                        log.warn("[{}] Failed to generate audit report for study {}: {}",
+                                                route.getAeTitle(), study.getStudyUid(), e.getMessage());
+                                    }
+                                } catch (Exception e) {
+                                    log.error("[{}] Failed to archive anonymized files for study {}: {}",
+                                            route.getAeTitle(), study.getStudyUid(), e.getMessage(), e);
+                                }
+                            }
                         } else {
                             log.warn("Anonymization produced no output files, using original files. Script: {}", anonScriptName);
                         }
                     } else {
                         log.warn("Script '{}' not found in library, using original files", anonScriptName);
                     }
+
+                    // Cleanup tempDir (keep anonDir if we need it for archive)
+                    try {
+                        Files.walk(tempDir).sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                            try { Files.deleteIfExists(p); } catch (IOException ignored) {}
+                        });
+                    } catch (IOException ignored) {}
                 } catch (Exception e) {
                     log.error("Anonymization failed, using original files: {}", e.getMessage(), e);
                     // Cleanup temp dirs on error
@@ -553,7 +780,13 @@ public class DicomRouter implements Callable<Integer> {
                 }
             }
 
-            return tempZip.toFile();
+            return new ZipCreationResult(tempZip.toFile(), wasAnonymized, scriptUsed, anonymizedDir);
+        }
+
+        // Backward-compatible overload without archiveManager
+        private File createZipFromStudy(DicomReceiver.ReceivedStudy study, boolean anonymize,
+                                         ScriptLibrary scriptLibrary, String anonScriptName) throws IOException {
+            return createZipFromStudy(study, anonymize, scriptLibrary, anonScriptName, null, null).zipFile;
         }
 
         private String extractProjectId(DicomReceiver.ReceivedStudy study) {
@@ -730,6 +963,18 @@ public class DicomRouter implements Callable<Integer> {
                 log.debug("[{}] Moved study to failed: {}", route.getAeTitle(), failedDir);
             } catch (IOException e) {
                 log.warn("[{}] Failed to move study to failed: {}", route.getAeTitle(), e.getMessage());
+            }
+        }
+
+        private void moveStudyToPendingReview(DicomReceiver.ReceivedStudy study, AppConfig.RouteConfig route) {
+            try {
+                Path sourceDir = study.getStudyDir();
+                Path pendingReviewDir = sourceDir.getParent().getParent().resolve("pending_review").resolve(sourceDir.getFileName());
+                Files.createDirectories(pendingReviewDir.getParent());
+                Files.move(sourceDir, pendingReviewDir, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                log.debug("[{}] Moved study to pending_review: {}", route.getAeTitle(), pendingReviewDir);
+            } catch (IOException e) {
+                log.warn("[{}] Failed to move study to pending_review: {}", route.getAeTitle(), e.getMessage());
             }
         }
 

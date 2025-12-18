@@ -1,125 +1,111 @@
-# HANDOFF - XNAT DICOM Router UI Improvements
+# HANDOFF: Enhanced Retry Workflow with Archive and Review
 
 ## 1. Context Summary
-
-- **Project:** XNAT DICOM Router Java application with React frontend
-- **Location:** `/Users/james/projects/xnat_dicom_router/java-app`
-- **Original Goal:** UI improvements including separating Index/Search pages, adding batch Q/R functionality from search, and pagination
-- **Why:** Enhancing usability for large datasets and enabling users to query/retrieve selected studies from search results
+- **Project**: XNAT DICOM Router (`/Users/james/projects/xnat_dicom_router/java-app`)
+- **Goal**: Implement comprehensive enhancement to the DICOM router for better retry handling, audit trails, and review workflows
+- **Why**: When sessions fail and need retry, routes with anonymization need access to original files (not anonymized). Also need audit trail and human-in-the-loop review for anonymized studies before sending.
 
 ## 2. Current State
 
-### Completed:
-1. **Header title moved** - "XNATWorks DICOM Router" moved from sidebar to header (left of theme dropdown) with white text for visibility
-2. **Batch Q/R feature** - Users can select studies in search results and send them to Query/Retrieve page
-3. **Search limit increased** - Changed from 100 to 1000 results max
-4. **Pagination implemented** - 50 studies per page with navigation controls
+### Completed
+- Plan created and approved at `/Users/james/.claude/plans/delegated-floating-bear.md`
+- GitHub repo made private
+- Router currently running in background on port 9090
 
-### Files Modified:
-- `ui/src/App.tsx` - Moved title to header-right, simplified sidebar header to just icon
-- `ui/src/pages/Search.tsx` - Added selection state, pagination state, handlers, and UI controls
-- `ui/src/pages/QueryRetrieve.tsx` - Added sessionStorage reading for bulk mode
+### Key Decisions Made
+1. **Option C: Full Enhancement** selected - includes archive, per-destination tracking, and review workflow
+2. **Per-route config** for review requirement (not global)
+3. **Per-destination retry** - only retry failed destinations, not entire study
 
-### Key Implementation Details:
-
-**Search.tsx changes:**
-```tsx
-// Selection state for batch Q/R
-const [selectedStudies, setSelectedStudies] = useState<Set<string>>(new Set())
-
-// Pagination state
-const [currentPage, setCurrentPage] = useState(1)
-const pageSize = 50
-
-// Pagination calculations
-const totalPages = searchResults ? Math.ceil(searchResults.studies.length / pageSize) : 0
-const startIndex = (currentPage - 1) * pageSize
-const endIndex = startIndex + pageSize
-const paginatedStudies = searchResults?.studies.slice(startIndex, endIndex) || []
-
-// Q/R handler stores UIDs in sessionStorage and navigates
-const handleQueryRetrieveSelected = () => {
-  sessionStorage.setItem('qr_bulk_uids', Array.from(selectedStudies).join('\n'))
-  sessionStorage.setItem('qr_bulk_type', 'studyInstanceUID')
-  navigate('/query-retrieve?mode=bulk')
-}
+### New Folder Structure (to implement)
 ```
-
-**QueryRetrieve.tsx changes:**
-```tsx
-// Read from sessionStorage on mount
-useEffect(() => {
-  const mode = searchParams.get('mode')
-  if (mode === 'bulk') {
-    const storedUIDs = sessionStorage.getItem('qr_bulk_uids')
-    const storedType = sessionStorage.getItem('qr_bulk_type')
-    if (storedUIDs) {
-      setQueryMode('bulk')
-      setBulkIdentifiers(storedUIDs)
-      if (storedType === 'studyInstanceUID' || ...) {
-        setBulkIdentifierType(storedType)
-      }
-      sessionStorage.removeItem('qr_bulk_uids')
-      sessionStorage.removeItem('qr_bulk_type')
-    }
-  }
-}, [searchParams])
+{baseDir}/{aeTitle}/
+├── incoming/                       # Unchanged
+├── processing/                     # Unchanged
+├── archive/                        # NEW
+│   └── {date}/study_{uid}/
+│       ├── original/
+│       ├── anonymized/
+│       ├── audit_report.json
+│       └── destinations/{dest}.json
+├── pending_review/                 # NEW
+├── completed/
+├── partial/                        # NEW (some destinations succeeded)
+├── failed/
+├── rejected/                       # NEW
+├── deleted/
+├── logs/
+└── history/
 ```
 
 ## 3. Next Steps
 
-1. **Rebuild and test the UI**
-   ```bash
-   cd /Users/james/projects/xnat_dicom_router/java-app/ui
-   npm run build
-   ```
+### Phase 1: Archive Infrastructure (START HERE)
+1. Create `src/main/java/io/xnatworks/router/archive/ArchiveManager.java`
+   - `archiveOriginal(study)` - Copy original files to archive
+   - `archiveAnonymized(study)` - Save anonymized files to archive
+   - `generateAuditReport(study)` - Create diff between original/anonymized
+   - `getArchivedStudy(studyUid)` - Retrieve archived data
 
-2. **Restart the Java server** (if not using Gradle continuous build)
-   ```bash
-   pkill -f 'dicom-router-2.0.0.jar' 2>/dev/null
-   cd /Users/james/projects/xnat_dicom_router/java-app
-   ./gradlew bootRun
-   ```
-   Or use the existing background process pattern from the session.
+2. Add `archive_retention_days` config to `AppConfig.java`
 
-3. **Test the features:**
-   - Search page loads with pagination showing 50 items per page
-   - Page navigation works (First, Prev, Next, Last)
-   - Study checkboxes work, Select All selects all studies (not just visible page)
-   - "Q/R Selected" button navigates to Query/Retrieve with UIDs pre-filled
-   - Header shows "XNATWorks DICOM Router" title in white text
+3. Modify `DicomRouter.java` processing pipeline:
+   - After study received: Copy to `archive/{date}/study_{uid}/original/`
+   - After anonymization: Save to `archive/{date}/study_{uid}/anonymized/`
+   - Generate audit report
 
-4. **Potential improvements** (not requested but could be useful):
-   - Page size selector (25/50/100)
-   - Jump to specific page input
-   - Persist pagination across searches
+4. Modify `StorageCleanupService.java` for archive cleanup
+
+### Phase 2: Per-Destination Tracking
+5. Enhance `TransferTracker.java` with `DestinationStatus` class
+6. Create `RetryManager.java`
+7. Add API endpoints to `TransfersResource.java`
+
+### Phase 3: Review Workflow
+8. Create `ReviewManager.java`
+9. Create `ReviewResource.java` with REST endpoints
+10. Modify processing pipeline for `require_review` routes
+
+### Phase 4: UI Updates
+11. Create `ui/src/pages/ReviewQueue.tsx`
+12. Create `ui/src/pages/ArchiveBrowser.tsx`
+13. Update `ui/src/App.tsx` and `ui/src/components/Sidebar.tsx`
 
 ## 4. Key Information
 
-### File Paths:
-- UI source: `ui/src/`
-- Main app: `ui/src/App.tsx`
-- Search page: `ui/src/pages/Search.tsx`
-- Query/Retrieve page: `ui/src/pages/QueryRetrieve.tsx`
-- CSS: `ui/src/index.css`
-- Build output: `src/main/resources/static/`
+### File Paths
+- **Plan document**: `/Users/james/.claude/plans/delegated-floating-bear.md`
+- **Main router**: `src/main/java/io/xnatworks/router/DicomRouter.java`
+- **Transfer tracking**: `src/main/java/io/xnatworks/router/tracking/TransferTracker.java`
+- **Config**: `src/main/java/io/xnatworks/router/config/AppConfig.java`
+- **Storage cleanup**: `src/main/java/io/xnatworks/router/tracking/StorageCleanupService.java`
+- **API hooks**: `ui/src/hooks/useApi.ts`
 
-### API Endpoints:
-- Search: `GET /api/search/studies`
-- Aggregations: `GET /api/search/stats/aggregations`
-- Study details: `GET /api/search/studies/{studyUid}`
+### Config Changes (to add to config.yaml)
+```yaml
+resilience:
+  archive_retention_days: 365      # NEW
 
-### Background Processes:
-There are multiple stale background Java processes from previous runs. Clean them up:
-```bash
-pkill -f 'dicom-router-2.0.0.jar'
+routes:
+  - ae_title: CT_RESEARCH
+    require_review: true           # NEW per-route config
+    destinations:
+      - destination: xnat-prod
+        max_retries: 3
+        retry_delay_seconds: 300
 ```
 
-### CSS Variables Used:
-- `--header-text` - Header text color (white in dark themes)
-- `--border-color` - Used for pagination separator
-- `--text-light` - Muted text color
-- `--bg-alt` - Alternative background color
+### Gotchas
+- Router running in background (multiple background shells from previous session)
+- Current anonymization already works on temp copies (originals preserved in failed folder)
+- Need to kill old router processes before rebuilding: `pkill -f "dicom-router-2.0.0.jar"`
+
+### Build Commands
+```bash
+cd /Users/james/projects/xnat_dicom_router/java-app
+export JAVA_HOME=/Users/james/Library/Java/JavaVirtualMachines/corretto-18.0.2/Contents/Home
+./gradlew shadowJar
+```
 
 ## 5. Instructions for New Session
 
@@ -128,6 +114,4 @@ Start the new session with:
 Read HANDOFF.md and continue from where we left off.
 ```
 
-The pagination implementation is complete in the code. The next step is to:
-1. Rebuild the UI: `cd ui && npm run build`
-2. Restart the server and test the functionality
+Then begin implementing Phase 1 by creating `ArchiveManager.java`. Read the full plan at `/Users/james/.claude/plans/delegated-floating-bear.md` for complete details on all phases.

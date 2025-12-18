@@ -668,6 +668,24 @@ public class AppConfig {
         @JsonProperty("auto_index_on_receive")
         private boolean autoIndexOnReceive = false;
 
+        /**
+         * Require human review before forwarding anonymized studies.
+         * When true and a destination has anonymization enabled:
+         * - Study is archived (original + anonymized + audit report)
+         * - Study goes to pending_review folder
+         * - Awaits manual approval before forwarding to destinations
+         */
+        @JsonProperty("require_review")
+        private boolean requireReview = false;
+
+        /**
+         * Enable archiving for this route.
+         * When true, original and anonymized files are preserved in the archive
+         * even after successful forwarding, enabling retries and audit trails.
+         */
+        @JsonProperty("enable_archive")
+        private boolean enableArchive = true;
+
         public String getAeTitle() { return aeTitle; }
         public void setAeTitle(String aeTitle) { this.aeTitle = aeTitle; }
 
@@ -719,10 +737,16 @@ public class AppConfig {
         public boolean isAutoIndexOnReceive() { return autoIndexOnReceive; }
         public void setAutoIndexOnReceive(boolean autoIndexOnReceive) { this.autoIndexOnReceive = autoIndexOnReceive; }
 
+        public boolean isRequireReview() { return requireReview; }
+        public void setRequireReview(boolean requireReview) { this.requireReview = requireReview; }
+
+        public boolean isEnableArchive() { return enableArchive; }
+        public void setEnableArchive(boolean enableArchive) { this.enableArchive = enableArchive; }
+
         @Override
         public String toString() {
-            return String.format("RouteConfig{aeTitle='%s', port=%d, destinations=%d, threads=%d}",
-                    aeTitle, port, destinations.size(), workerThreads);
+            return String.format("RouteConfig{aeTitle='%s', port=%d, destinations=%d, threads=%d, review=%s}",
+                    aeTitle, port, destinations.size(), workerThreads, requireReview);
         }
     }
 
@@ -1305,6 +1329,15 @@ public class AppConfig {
         private int retentionDays = 30;
 
         /**
+         * Retention period in days for archived study folders (original + anonymized + audit reports).
+         * Archives are kept longer than completed/failed for audit and retry purposes.
+         * Default is 365 days (1 year).
+         * Set to -1 to disable automatic cleanup of archives.
+         */
+        @JsonProperty("archive_retention_days")
+        private int archiveRetentionDays = 365;
+
+        /**
          * Retention period in days for deleted (soft-deleted) study folders.
          * Default is 7 days - deleted studies are permanently removed after this period.
          * Set to -1 to disable automatic cleanup of deleted folders.
@@ -1326,6 +1359,9 @@ public class AppConfig {
 
         public int getRetentionDays() { return retentionDays; }
         public void setRetentionDays(int retentionDays) { this.retentionDays = retentionDays; }
+
+        public int getArchiveRetentionDays() { return archiveRetentionDays; }
+        public void setArchiveRetentionDays(int archiveRetentionDays) { this.archiveRetentionDays = archiveRetentionDays; }
 
         public int getDeletedRetentionDays() { return deletedRetentionDays; }
         public void setDeletedRetentionDays(int deletedRetentionDays) { this.deletedRetentionDays = deletedRetentionDays; }
