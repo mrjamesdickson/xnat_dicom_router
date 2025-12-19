@@ -46,7 +46,8 @@ class ScriptEnhancerTest {
 
             // Should contain the DicomEdit 6 shiftDateTimeByIncrement syntax
             assertTrue(enhanced.contains("shiftDateTimeByIncrement["));
-            assertTrue(enhanced.contains("\"-365\""));
+            // Note: ScriptEnhancer divides by 2 to compensate for DicomEdit's double-shift bug
+            assertTrue(enhanced.contains("\"-182\""));
             assertTrue(enhanced.contains("\"days\""));
 
             // Should include Study Date
@@ -69,7 +70,8 @@ class ScriptEnhancerTest {
         void shouldHandlePositiveDateShift() {
             String enhanced = ScriptEnhancer.enhanceWithDateShift(SAMPLE_SCRIPT, 30);
 
-            assertTrue(enhanced.contains("\"30\""));
+            // Note: ScriptEnhancer divides by 2 to compensate for DicomEdit's double-shift bug
+            assertTrue(enhanced.contains("\"15\""));
             assertTrue(enhanced.contains("\"days\""));
         }
 
@@ -78,7 +80,8 @@ class ScriptEnhancerTest {
         void shouldHandleNegativeDateShift() {
             String enhanced = ScriptEnhancer.enhanceWithDateShift(SAMPLE_SCRIPT, -730);
 
-            assertTrue(enhanced.contains("\"-730\""));
+            // Note: ScriptEnhancer divides by 2 to compensate for DicomEdit's double-shift bug
+            assertTrue(enhanced.contains("\"-365\""));
             assertTrue(enhanced.contains("\"days\""));
         }
 
@@ -102,8 +105,9 @@ class ScriptEnhancerTest {
             String enhanced = ScriptEnhancer.enhanceWithDateShift(SAMPLE_SCRIPT, -100);
 
             // Verify the exact syntax: tag := shiftDateTimeByIncrement[tag, "shift", "days"]
-            assertTrue(enhanced.contains("shiftDateTimeByIncrement[(0008,0020), \"-100\", \"days\"]") ||
-                       enhanced.contains("shiftDateTimeByIncrement[(0010,0030), \"-100\", \"days\"]"));
+            // Note: ScriptEnhancer divides by 2 to compensate for DicomEdit's double-shift bug
+            assertTrue(enhanced.contains("shiftDateTimeByIncrement[(0008,0020), \"-50\", \"days\"]") ||
+                       enhanced.contains("shiftDateTimeByIncrement[(0010,0030), \"-50\", \"days\"]"));
         }
     }
 
@@ -173,7 +177,8 @@ class ScriptEnhancerTest {
 
             // Should contain date shift commands
             assertTrue(enhanced.contains("shiftDateTimeByIncrement["));
-            assertTrue(enhanced.contains("\"-365\""));
+            // Note: ScriptEnhancer divides by 2 to compensate for DicomEdit's double-shift bug
+            assertTrue(enhanced.contains("\"-182\""));
 
             // Should contain UID hash commands
             assertTrue(enhanced.contains("hashUID["));

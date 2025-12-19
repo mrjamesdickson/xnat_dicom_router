@@ -89,13 +89,13 @@ class StatusResourceTest {
         }
 
         @Test
-        @DisplayName("Should include version 2.0.0")
+        @DisplayName("Should include version 2.1.0")
         void shouldIncludeVersion() {
             Response response = statusResource.getStatus();
 
             @SuppressWarnings("unchecked")
             Map<String, Object> status = (Map<String, Object>) response.getEntity();
-            assertEquals("2.0.0", status.get("version"));
+            assertEquals("2.1.0", status.get("version"));
         }
 
         @Test
