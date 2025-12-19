@@ -15,7 +15,10 @@ import org.dcm4che2.data.VR;
 import org.dcm4che2.io.DicomInputStream;
 import org.dcm4che2.io.DicomOutputStream;
 import org.dcm4che2.io.StopTagInputHandler;
-import org.nrg.dcm.edit.ScriptApplicator;
+import org.nrg.dicom.dicomedit.DE6Script;
+import org.nrg.dicom.dicomedit.ScriptApplicatorI;
+import org.nrg.dicom.dicomedit.SerialScriptApplicator;
+import org.nrg.dicom.mizer.exceptions.MizerException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,6 +30,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
 
@@ -66,10 +70,10 @@ public class LargeFileAnonymizer {
      *
      * @param inputFile Input DICOM file (must be > 2GB)
      * @param outputFile Output DICOM file
-     * @param applicator Pre-configured ScriptApplicator
+     * @param applicator Pre-configured ScriptApplicatorI
      * @return true if successful
      */
-    public boolean anonymizeLargeFile(Path inputFile, Path outputFile, ScriptApplicator applicator)
+    public boolean anonymizeLargeFile(Path inputFile, Path outputFile, ScriptApplicatorI applicator)
             throws IOException {
         long fileSize = Files.size(inputFile);
         log.info("Using streaming anonymization for large file: {} ({} GB)",
@@ -206,15 +210,21 @@ public class LargeFileAnonymizer {
      */
     public boolean anonymizeLargeFile(Path inputFile, Path outputFile, String script,
             Map<String, String> variables) throws IOException {
-        // Create applicator from script
-        ByteArrayInputStream scriptStream = new ByteArrayInputStream(script.getBytes(StandardCharsets.UTF_8));
-        ScriptApplicator applicator = new ScriptApplicator(scriptStream);
+        // Create applicator from script using DicomEdit 6.6.0 API
+        ScriptApplicatorI applicator;
+        try {
+            ByteArrayInputStream scriptStream = new ByteArrayInputStream(script.getBytes(StandardCharsets.UTF_8));
+            DE6Script de6Script = new DE6Script(scriptStream);
+            applicator = new SerialScriptApplicator(Collections.singletonList(de6Script));
 
-        // Set variables
-        if (variables != null) {
-            for (Map.Entry<String, String> entry : variables.entrySet()) {
-                applicator.setVariable(entry.getKey(), entry.getValue());
+            // Set variables
+            if (variables != null) {
+                for (Map.Entry<String, String> entry : variables.entrySet()) {
+                    applicator.setVariable(entry.getKey(), entry.getValue());
+                }
             }
+        } catch (MizerException e) {
+            throw new IOException("Failed to parse anonymization script: " + e.getMessage(), e);
         }
 
         return anonymizeLargeFile(inputFile, outputFile, applicator);

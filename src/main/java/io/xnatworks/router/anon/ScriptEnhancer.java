@@ -103,8 +103,19 @@ public class ScriptEnhancer {
         enhanced.append(script);
 
         // Add date shift commands using DicomEdit 6 syntax
+        // NOTE: When using (tag) := shiftDateTimeByIncrement[(tag), ...], the shift is applied twice
+        // because the RHS reads the tag (applying shift) and then assigns back (applying shift again).
+        // Workaround: divide the requested shift by 2 so the net effect is correct.
+        int adjustedShift = dateShiftDays / 2;
+        int remainder = dateShiftDays % 2;
+        if (remainder != 0) {
+            log.warn("Date shift {} is odd, will be rounded to {} days (effective: {} days)",
+                    dateShiftDays, adjustedShift, adjustedShift * 2);
+        }
+
         enhanced.append("\n\n// Date Shifting - Patient-specific offset: ").append(dateShiftDays).append(" days\n");
         enhanced.append("// Using DicomEdit 6 shiftDateTimeByIncrement function\n");
+        enhanced.append("// Note: Script uses ").append(adjustedShift).append(" to achieve ").append(adjustedShift * 2).append(" day shift (DicomEdit applies twice)\n");
 
         List<String> existingTags = extractExistingTags(script);
 
@@ -115,7 +126,7 @@ public class ScriptEnhancer {
                 if (!tagIsCleared(script, tag)) {
                     // DicomEdit 6 syntax: shiftDateTimeByIncrement[(tag), "shift", "days"]
                     enhanced.append(tag).append(" := shiftDateTimeByIncrement[").append(tag)
-                            .append(", \"").append(dateShiftDays).append("\", \"days\"]")
+                            .append(", \"").append(adjustedShift).append("\", \"days\"]")
                             .append("  // Shift by ").append(dateShiftDays).append(" days\n");
                 }
             }

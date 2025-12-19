@@ -1294,7 +1294,7 @@ public class StorageResource {
         int count = 0;
         try (TarArchiveInputStream tis = new TarArchiveInputStream(new BufferedInputStream(inputStream))) {
             TarArchiveEntry entry;
-            while ((entry = tis.getNextEntry()) != null) {
+            while ((entry = tis.getNextTarEntry()) != null) {
                 if (entry.isDirectory()) {
                     continue;
                 }

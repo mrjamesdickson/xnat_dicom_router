@@ -12,7 +12,10 @@ import org.dcm4che2.data.BasicDicomObject;
 import org.dcm4che2.data.DicomObject;
 import org.dcm4che2.io.DicomInputStream;
 import org.dcm4che2.io.DicomOutputStream;
-import org.nrg.dcm.edit.ScriptApplicator;
+import org.nrg.dicom.dicomedit.DE6Script;
+import org.nrg.dicom.dicomedit.ScriptApplicatorI;
+import org.nrg.dicom.dicomedit.SerialScriptApplicator;
+import org.nrg.dicom.mizer.exceptions.MizerException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,6 +42,11 @@ public class AnonymizationService {
     private final ScriptLibrary scriptLibrary;
     private final XnatClient xnatClient;  // Optional - for fetching scripts from XNAT
     private final LargeFileAnonymizer largeFileAnonymizer = new LargeFileAnonymizer();
+    private final AnonymizationVerifier verifier = new AnonymizationVerifier();
+
+    // Configuration for verification
+    private boolean verificationEnabled = true;
+    private Integer expectedDateShiftDays = null;
 
     /**
      * Create service with script library (standalone mode).
@@ -66,20 +74,63 @@ public class AnonymizationService {
     }
 
     /**
-     * Create a ScriptApplicator from script content.
+     * Enable or disable anonymization verification.
+     * When enabled, each anonymized file is verified to ensure the anonymization was applied correctly.
+     * CRITICAL: Disabling verification is not recommended for production use.
      */
-    private ScriptApplicator createApplicator(String script, Map<String, String> variables) throws IOException {
-        ByteArrayInputStream scriptStream = new ByteArrayInputStream(script.getBytes(StandardCharsets.UTF_8));
-        ScriptApplicator applicator = new ScriptApplicator(scriptStream);
-
-        // Set variables
-        if (variables != null) {
-            for (Map.Entry<String, String> entry : variables.entrySet()) {
-                applicator.setVariable(entry.getKey(), entry.getValue());
-            }
+    public void setVerificationEnabled(boolean enabled) {
+        this.verificationEnabled = enabled;
+        if (!enabled) {
+            log.warn("ANONYMIZATION VERIFICATION DISABLED - This is not recommended for production use!");
         }
+    }
 
-        return applicator;
+    /**
+     * Set the expected date shift for verification.
+     * This is used to verify that date shifting was applied correctly.
+     *
+     * @param days The expected date shift in days (positive = future, negative = past)
+     */
+    public void setExpectedDateShiftDays(Integer days) {
+        this.expectedDateShiftDays = days;
+        if (days != null) {
+            log.info("Date shift verification enabled: expecting {} day shift", days);
+        }
+    }
+
+    /**
+     * Create verification config based on current settings.
+     */
+    private AnonymizationVerifier.VerificationConfig createVerificationConfig() {
+        AnonymizationVerifier.VerificationConfig config = new AnonymizationVerifier.VerificationConfig();
+        config.setExpectedDateShiftDays(expectedDateShiftDays);
+        config.setVerifyUidsChanged(true);
+        config.setVerifyPatientInfoModified(true);
+        config.setVerifyDatesShifted(expectedDateShiftDays != null);
+        config.setFailOnFirstError(false); // Collect all errors
+        return config;
+    }
+
+    /**
+     * Create a ScriptApplicatorI from script content using DicomEdit 6.6.0 API.
+     */
+    private ScriptApplicatorI createApplicator(String script, Map<String, String> variables) throws IOException {
+        try {
+            ByteArrayInputStream scriptStream = new ByteArrayInputStream(script.getBytes(StandardCharsets.UTF_8));
+            DE6Script de6Script = new DE6Script(scriptStream);
+            ScriptApplicatorI applicator = new SerialScriptApplicator(Collections.singletonList(de6Script));
+
+            // Set variables
+            if (variables != null) {
+                for (Map.Entry<String, String> entry : variables.entrySet()) {
+                    applicator.setVariable(entry.getKey(), entry.getValue());
+                }
+            }
+
+            return applicator;
+        } catch (MizerException e) {
+            throw new IOException("Failed to parse anonymization script: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -108,26 +159,60 @@ public class AnonymizationService {
      * @param script       DicomEdit script content
      * @param variables    Script variables (e.g., project, subject, session)
      * @return true if successful
+     * @throws IOException if anonymization fails
+     * @throws AnonymizationVerifier.AnonymizationVerificationException if verification fails
      */
     public boolean anonymizeFileWithScript(Path inputFile, Path outputFile, String script,
                                             Map<String, String> variables) throws IOException {
-        ScriptApplicator applicator = createApplicator(script, variables);
+        ScriptApplicatorI applicator = createApplicator(script, variables);
 
         // Read input DICOM using dcm4che2
-        DicomObject dcmObj;
+        DicomObject originalDcm;
         try (DicomInputStream dis = new DicomInputStream(inputFile.toFile())) {
-            dcmObj = dis.readDicomObject();
+            originalDcm = dis.readDicomObject();
         }
 
-        // Apply the script
-        applicator.apply(inputFile.toFile(), dcmObj);
+        // Keep a copy for verification if enabled
+        DicomObject dcmForVerification = null;
+        if (verificationEnabled) {
+            // Deep copy for verification - read again from file
+            try (DicomInputStream dis = new DicomInputStream(inputFile.toFile())) {
+                dcmForVerification = dis.readDicomObject();
+            }
+        }
+
+        // Apply the script to the original object
+        try {
+            applicator.apply(inputFile.toFile(), originalDcm);
+        } catch (MizerException e) {
+            throw new IOException("Failed to apply anonymization script: " + e.getMessage(), e);
+        }
+
+        // Verify anonymization was applied correctly BEFORE writing
+        if (verificationEnabled && dcmForVerification != null) {
+            AnonymizationVerifier.VerificationConfig config = createVerificationConfig();
+            AnonymizationVerifier.VerificationResult verifyResult = verifier.verify(dcmForVerification, originalDcm, config);
+
+            if (!verifyResult.isAllPassed()) {
+                String sopUid = originalDcm.getString(org.dcm4che2.data.Tag.SOPInstanceUID, "unknown");
+                log.error("ANONYMIZATION VERIFICATION FAILED for {}:\n{}", inputFile.getFileName(), verifyResult);
+
+                // Throw exception - do NOT write the file if verification fails
+                throw new IOException("Anonymization verification failed for " + inputFile.getFileName() +
+                        ": " + verifyResult.getFailedCount() + " checks failed. " +
+                        "See logs for details. SOP UID: " + sopUid);
+            }
+
+            log.debug("Anonymization verified for {}: {} checks passed",
+                    inputFile.getFileName(), verifyResult.getPassedCount());
+        }
 
         // Ensure output directory exists
         Files.createDirectories(outputFile.getParent());
 
-        // Write output DICOM
+        // Write output DICOM (only if verification passed or disabled)
         try (DicomOutputStream dos = new DicomOutputStream(outputFile.toFile())) {
-            dos.writeDicomFile(dcmObj);
+            dos.writeDicomFile(originalDcm);
         }
 
         return true;
@@ -181,7 +266,7 @@ public class AnonymizationService {
         AtomicInteger errorCount = new AtomicInteger(0);
 
         // Create the applicator once for all files
-        ScriptApplicator applicator = createApplicator(script, variables);
+        ScriptApplicatorI applicator = createApplicator(script, variables);
 
         // Process all DICOM files
         try {
@@ -202,13 +287,22 @@ public class AnonymizationService {
 
                             if (isLargeFile) {
                                 // Use streaming approach for files > 2GB
+                                // Note: Large file anonymization has limited verification support
                                 log.info("Using streaming anonymization for large file: {} ({} GB)",
                                         inputFile.getFileName(),
                                         String.format("%.2f", fileBytes / (1024.0 * 1024.0 * 1024.0)));
                                 largeFileAnonymizer.anonymizeLargeFile(inputFile, outputFile, applicator);
                             } else {
                                 // Standard approach for normal-sized files
-                                // Read input DICOM using dcm4che2
+                                // Read original for verification
+                                DicomObject originalDcm = null;
+                                if (verificationEnabled) {
+                                    try (DicomInputStream dis = new DicomInputStream(inputFile.toFile())) {
+                                        originalDcm = dis.readDicomObject();
+                                    }
+                                }
+
+                                // Read input DICOM for anonymization
                                 DicomObject dcmObj;
                                 try (DicomInputStream dis = new DicomInputStream(inputFile.toFile())) {
                                     dcmObj = dis.readDicomObject();
@@ -217,10 +311,24 @@ public class AnonymizationService {
                                 // Apply the script
                                 applicator.apply(inputFile.toFile(), dcmObj);
 
+                                // Verify BEFORE writing
+                                if (verificationEnabled && originalDcm != null) {
+                                    AnonymizationVerifier.VerificationConfig config = createVerificationConfig();
+                                    AnonymizationVerifier.VerificationResult verifyResult =
+                                            verifier.verify(originalDcm, dcmObj, config);
+
+                                    if (!verifyResult.isAllPassed()) {
+                                        log.error("ANONYMIZATION VERIFICATION FAILED for {}:\n{}",
+                                                inputFile.getFileName(), verifyResult);
+                                        throw new IOException("Verification failed: " +
+                                                verifyResult.getFailedCount() + " checks failed");
+                                    }
+                                }
+
                                 // Ensure output directory exists
                                 Files.createDirectories(outputFile.getParent());
 
-                                // Write output DICOM
+                                // Write output DICOM (only if verification passed)
                                 try (DicomOutputStream dos = new DicomOutputStream(outputFile.toFile())) {
                                     dos.writeDicomFile(dcmObj);
                                 }

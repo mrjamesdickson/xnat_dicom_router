@@ -14,7 +14,10 @@ import org.dcm4che2.data.DicomElement;
 import org.dcm4che2.io.DicomInputStream;
 import org.dcm4che2.io.DicomOutputStream;
 import org.dcm4che2.io.StopTagInputHandler;
-import org.nrg.dcm.edit.ScriptApplicator;
+import org.nrg.dicom.dicomedit.DE6Script;
+import org.nrg.dicom.dicomedit.ScriptApplicatorI;
+import org.nrg.dicom.dicomedit.SerialScriptApplicator;
+import org.nrg.dicom.mizer.exceptions.MizerException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,6 +30,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -110,13 +114,19 @@ public class StreamingAnonymizer {
         AtomicInteger errorCount = new AtomicInteger(0);
         AtomicInteger totalBytes = new AtomicInteger(0);
 
-        // Create script applicator
-        ByteArrayInputStream scriptStream = new ByteArrayInputStream(script.getBytes(StandardCharsets.UTF_8));
-        ScriptApplicator applicator = new ScriptApplicator(scriptStream);
-        if (variables != null) {
-            for (Map.Entry<String, String> entry : variables.entrySet()) {
-                applicator.setVariable(entry.getKey(), entry.getValue());
+        // Create script applicator using DicomEdit 6.6.0 API
+        ScriptApplicatorI applicator;
+        try {
+            ByteArrayInputStream scriptStream = new ByteArrayInputStream(script.getBytes(StandardCharsets.UTF_8));
+            DE6Script de6Script = new DE6Script(scriptStream);
+            applicator = new SerialScriptApplicator(Collections.singletonList(de6Script));
+            if (variables != null) {
+                for (Map.Entry<String, String> entry : variables.entrySet()) {
+                    applicator.setVariable(entry.getKey(), entry.getValue());
+                }
             }
+        } catch (MizerException e) {
+            throw new IOException("Failed to parse anonymization script: " + e.getMessage(), e);
         }
 
         // Create ZIP output stream
@@ -191,13 +201,19 @@ public class StreamingAnonymizer {
         Map<String, String> reportedSeriesUids = new HashMap<>();
         Map<String, String> reportedSopUids = new HashMap<>();
 
-        // Create script applicator
-        ByteArrayInputStream scriptStream = new ByteArrayInputStream(script.getBytes(StandardCharsets.UTF_8));
-        ScriptApplicator applicator = new ScriptApplicator(scriptStream);
-        if (variables != null) {
-            for (Map.Entry<String, String> entry : variables.entrySet()) {
-                applicator.setVariable(entry.getKey(), entry.getValue());
+        // Create script applicator using DicomEdit 6.6.0 API
+        ScriptApplicatorI applicator;
+        try {
+            ByteArrayInputStream scriptStream = new ByteArrayInputStream(script.getBytes(StandardCharsets.UTF_8));
+            DE6Script de6Script = new DE6Script(scriptStream);
+            applicator = new SerialScriptApplicator(Collections.singletonList(de6Script));
+            if (variables != null) {
+                for (Map.Entry<String, String> entry : variables.entrySet()) {
+                    applicator.setVariable(entry.getKey(), entry.getValue());
+                }
             }
+        } catch (MizerException e) {
+            throw new IOException("Failed to parse anonymization script: " + e.getMessage(), e);
         }
 
         // Create ZIP output stream
@@ -253,7 +269,7 @@ public class StreamingAnonymizer {
      * Anonymize a normal-sized file and write to ZIP.
      */
     private void anonymizeNormalFileToZip(File inputFile, ZipOutputStream zos,
-                                          ScriptApplicator applicator) throws Exception {
+                                          ScriptApplicatorI applicator) throws Exception {
         anonymizeNormalFileToZipWithCallback(inputFile, zos, applicator, null, null, null, null);
     }
 
@@ -261,7 +277,7 @@ public class StreamingAnonymizer {
      * Anonymize a normal-sized file and write to ZIP, with UID callback.
      */
     private void anonymizeNormalFileToZipWithCallback(File inputFile, ZipOutputStream zos,
-                                                      ScriptApplicator applicator,
+                                                      ScriptApplicatorI applicator,
                                                       UidMappingCallback uidCallback,
                                                       Map<String, String> reportedStudyUids,
                                                       Map<String, String> reportedSeriesUids,
@@ -333,7 +349,7 @@ public class StreamingAnonymizer {
      * Only reads header into memory, streams pixel data directly.
      */
     private void anonymizeLargeFileToZip(File inputFile, ZipOutputStream zos,
-                                         ScriptApplicator applicator) throws Exception {
+                                         ScriptApplicatorI applicator) throws Exception {
         anonymizeLargeFileToZipWithCallback(inputFile, zos, applicator, null, null, null, null);
     }
 
@@ -341,7 +357,7 @@ public class StreamingAnonymizer {
      * Anonymize a large file with UID callback support.
      */
     private void anonymizeLargeFileToZipWithCallback(File inputFile, ZipOutputStream zos,
-                                                     ScriptApplicator applicator,
+                                                     ScriptApplicatorI applicator,
                                                      UidMappingCallback uidCallback,
                                                      Map<String, String> reportedStudyUids,
                                                      Map<String, String> reportedSeriesUids,
