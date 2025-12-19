@@ -34,7 +34,8 @@ dependencies {
     // Using 6.6.0 - provides shiftDateTimeByIncrement function
     // Note: 6.6.0 has a double-shift bug when using tag reference syntax - ScriptEnhancer compensates
     // Note: 6.6.0+ uses new package org.nrg.dicom.dicomedit (not org.nrg.dcm.edit)
-    implementation files('libs/dicom-edit6-6.6.0-jar-with-dependencies.jar')
+    // Note: Using repackaged JAR without Jackson to avoid version conflicts with our Jackson 2.16.0
+    implementation files("$buildDir/libs-repackaged/dicom-edit6-6.6.0-no-jackson.jar")
     // DicomEdit 6.x uses dcm4che2
     implementation 'dcm4che:dcm4che-core:2.0.29'
     implementation 'dcm4che:dcm4che-net:2.0.29'
@@ -91,7 +92,36 @@ application {
     mainClass = 'io.xnatworks.router.DicomRouter'
 }
 
+// Configuration to extract DicomEdit without Jackson
+configurations {
+    dicomEditRepackaged
+}
+
+// Task to repackage DicomEdit JAR without Jackson classes
+task repackageDicomEdit(type: Zip) {
+    archiveFileName = 'dicom-edit6-6.6.0-no-jackson.jar'
+    destinationDirectory = file("$buildDir/libs-repackaged")
+
+    from(zipTree('libs/dicom-edit6-6.6.0-jar-with-dependencies.jar')) {
+        // Exclude Jackson classes that conflict with our Jackson 2.16.0
+        exclude 'com/fasterxml/jackson/**'
+        exclude 'META-INF/maven/com.fasterxml.jackson.core/**'
+        exclude 'META-INF/maven/com.fasterxml.jackson.dataformat/**'
+        exclude 'META-INF/maven/com.fasterxml.jackson.datatype/**'
+        exclude 'META-INF/services/com.fasterxml.jackson.*'
+        // Exclude SnakeYAML that conflicts with our SnakeYAML 2.2
+        exclude 'org/yaml/snakeyaml/**'
+        exclude 'META-INF/maven/org.yaml/**'
+    }
+}
+
+// Ensure repackaged JAR is available before compilation
+compileJava.dependsOn repackageDicomEdit
+compileTestJava.dependsOn repackageDicomEdit
+
 shadowJar {
+    dependsOn repackageDicomEdit
+
     archiveBaseName.set('dicom-router')
     archiveClassifier.set('')
     archiveVersion.set(version)

@@ -412,6 +412,19 @@ public class RoutesResource {
         if (data.containsKey("honestBroker")) {
             dest.setHonestBrokerName((String) data.get("honestBroker"));
         }
+        // OCR PHI detection settings
+        if (data.containsKey("ocrEnabled")) {
+            dest.setOcrEnabled((Boolean) data.get("ocrEnabled"));
+        }
+        if (data.containsKey("ocrRedact")) {
+            dest.setOcrRedact((Boolean) data.get("ocrRedact"));
+        }
+        if (data.containsKey("ocrConfidenceThreshold")) {
+            dest.setOcrConfidenceThreshold(((Number) data.get("ocrConfidenceThreshold")).floatValue());
+        }
+        if (data.containsKey("ocrRedactPadding")) {
+            dest.setOcrRedactPadding(((Number) data.get("ocrRedactPadding")).intValue());
+        }
     }
 
     private Map<String, Object> routeToMap(AppConfig.RouteConfig route) {
@@ -497,6 +510,11 @@ public class RoutesResource {
         d.put("retryDelaySeconds", dest.getRetryDelaySeconds());
         d.put("useHonestBroker", dest.isUseHonestBroker());
         d.put("honestBroker", dest.getHonestBrokerName());
+        // OCR PHI detection settings
+        d.put("ocrEnabled", dest.isOcrEnabled());
+        d.put("ocrRedact", dest.isOcrRedact());
+        d.put("ocrConfidenceThreshold", dest.getOcrConfidenceThreshold());
+        d.put("ocrRedactPadding", dest.getOcrRedactPadding());
         return d;
     }
 }
