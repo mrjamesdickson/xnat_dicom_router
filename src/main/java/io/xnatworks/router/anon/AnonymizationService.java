@@ -29,12 +29,16 @@ import java.util.zip.ZipOutputStream;
 /**
  * Anonymization service using DicomEdit library directly.
  * Integrates with ScriptLibrary for script management.
+ *
+ * For very large files (> 2GB), uses streaming-based anonymization via LargeFileAnonymizer
+ * to avoid memory issues with dcm4che2's integer limitations.
  */
 public class AnonymizationService {
     private static final Logger log = LoggerFactory.getLogger(AnonymizationService.class);
 
     private final ScriptLibrary scriptLibrary;
     private final XnatClient xnatClient;  // Optional - for fetching scripts from XNAT
+    private final LargeFileAnonymizer largeFileAnonymizer = new LargeFileAnonymizer();
 
     /**
      * Create service with script library (standalone mode).
@@ -192,28 +196,58 @@ public class AnonymizationService {
                         Path outputFile = outputDir.resolve(relativePath);
 
                         try {
-                            // Read input DICOM using dcm4che2
-                            DicomObject dcmObj;
-                            try (DicomInputStream dis = new DicomInputStream(inputFile.toFile())) {
-                                dcmObj = dis.readDicomObject();
-                            }
+                            // Check if this is a large file requiring streaming approach
+                            long fileBytes = Files.size(inputFile);
+                            boolean isLargeFile = fileBytes > LargeFileAnonymizer.LARGE_FILE_THRESHOLD;
 
-                            // Apply the script
-                            applicator.apply(inputFile.toFile(), dcmObj);
+                            if (isLargeFile) {
+                                // Use streaming approach for files > 2GB
+                                log.info("Using streaming anonymization for large file: {} ({} GB)",
+                                        inputFile.getFileName(),
+                                        String.format("%.2f", fileBytes / (1024.0 * 1024.0 * 1024.0)));
+                                largeFileAnonymizer.anonymizeLargeFile(inputFile, outputFile, applicator);
+                            } else {
+                                // Standard approach for normal-sized files
+                                // Read input DICOM using dcm4che2
+                                DicomObject dcmObj;
+                                try (DicomInputStream dis = new DicomInputStream(inputFile.toFile())) {
+                                    dcmObj = dis.readDicomObject();
+                                }
 
-                            // Ensure output directory exists
-                            Files.createDirectories(outputFile.getParent());
+                                // Apply the script
+                                applicator.apply(inputFile.toFile(), dcmObj);
 
-                            // Write output DICOM
-                            try (DicomOutputStream dos = new DicomOutputStream(outputFile.toFile())) {
-                                dos.writeDicomFile(dcmObj);
+                                // Ensure output directory exists
+                                Files.createDirectories(outputFile.getParent());
+
+                                // Write output DICOM
+                                try (DicomOutputStream dos = new DicomOutputStream(outputFile.toFile())) {
+                                    dos.writeDicomFile(dcmObj);
+                                }
                             }
 
                             outputCount.incrementAndGet();
 
                         } catch (Exception e) {
                             errorCount.incrementAndGet();
-                            log.error("Error anonymizing {}: {}", inputFile.getFileName(), e.getMessage());
+                            String fileSize = "unknown";
+                            try {
+                                long bytes = Files.size(inputFile);
+                                fileSize = String.format("%.2f MB", bytes / (1024.0 * 1024.0));
+                            } catch (IOException ignored) {}
+                            log.error("Error anonymizing {} (size: {}): {} - {}",
+                                    inputFile.getFileName(), fileSize,
+                                    e.getClass().getSimpleName(),
+                                    e.getMessage() != null ? e.getMessage() : "no message", e);
+                        } catch (OutOfMemoryError e) {
+                            errorCount.incrementAndGet();
+                            String fileSize = "unknown";
+                            try {
+                                long bytes = Files.size(inputFile);
+                                fileSize = String.format("%.2f MB", bytes / (1024.0 * 1024.0));
+                            } catch (IOException ignored) {}
+                            log.error("OutOfMemoryError processing {} (size: {}). File too large for current heap size.",
+                                    inputFile.getFileName(), fileSize);
                         }
                     });
         } catch (IOException e) {

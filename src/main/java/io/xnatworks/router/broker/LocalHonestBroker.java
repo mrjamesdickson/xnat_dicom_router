@@ -449,6 +449,88 @@ public class LocalHonestBroker {
     }
 
     /**
+     * Get the date shift offset for a patient.
+     * If date shifting is enabled and no offset exists, generates a random one.
+     *
+     * @param patientId Original PatientID
+     * @return Date shift offset in days, or 0 if date shifting is disabled
+     */
+    public int getDateShiftForPatient(String patientId) {
+        if (!config.isDateShiftEnabled()) {
+            return 0;
+        }
+
+        int minDays = config.getDateShiftMinDays();
+        int maxDays = config.getDateShiftMaxDays();
+
+        int offset = crosswalkStore.getOrCreateDateShift(brokerName, patientId, minDays, maxDays);
+        log.debug("Date shift for patient {}: {} days", patientId, offset);
+        return offset;
+    }
+
+    /**
+     * Get existing date shift for a patient without creating a new one.
+     *
+     * @param patientId Original PatientID
+     * @return Date shift offset in days, or null if not found
+     */
+    public Integer getExistingDateShift(String patientId) {
+        if (!config.isDateShiftEnabled()) {
+            return null;
+        }
+        return crosswalkStore.getDateShift(brokerName, patientId);
+    }
+
+    /**
+     * Store a UID mapping if UID hashing is enabled.
+     *
+     * @param originalUid Original UID
+     * @param hashedUid Hashed/anonymized UID
+     * @param uidType Type of UID (study_uid, series_uid, sop_uid)
+     * @return true if stored or if hashing is disabled, false on error
+     */
+    public boolean storeUidMapping(String originalUid, String hashedUid, String uidType) {
+        if (!config.isHashUidsEnabled()) {
+            // UID hashing is disabled, nothing to store
+            return true;
+        }
+
+        boolean success = crosswalkStore.storeUidMapping(brokerName, originalUid, hashedUid, uidType);
+        if (success) {
+            log.debug("Stored UID mapping: {} {} -> {}", uidType, originalUid, hashedUid);
+        }
+        return success;
+    }
+
+    /**
+     * Lookup a hashed UID from the crosswalk.
+     *
+     * @param originalUid Original UID
+     * @param uidType Type of UID (study_uid, series_uid, sop_uid)
+     * @return Hashed UID or null if not found
+     */
+    public String lookupHashedUid(String originalUid, String uidType) {
+        if (!config.isHashUidsEnabled()) {
+            return null;
+        }
+        return crosswalkStore.lookupHashedUid(brokerName, originalUid, uidType);
+    }
+
+    /**
+     * Check if date shifting is enabled for this broker.
+     */
+    public boolean isDateShiftEnabled() {
+        return config.isDateShiftEnabled();
+    }
+
+    /**
+     * Check if UID hashing crosswalk storage is enabled for this broker.
+     */
+    public boolean isHashUidsEnabled() {
+        return config.isHashUidsEnabled();
+    }
+
+    /**
      * Get statistics about this broker.
      */
     public BrokerStats getStats() {

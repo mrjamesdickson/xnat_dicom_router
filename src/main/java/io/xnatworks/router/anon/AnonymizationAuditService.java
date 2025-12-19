@@ -619,6 +619,10 @@ public class AnonymizationAuditService {
         private String tagName;
         private int changeCount;
 
+        // Default constructor for JSON deserialization
+        public TagSummary() {
+        }
+
         public TagSummary(String tagHex, String tagName) {
             this.tagHex = tagHex;
             this.tagName = tagName;

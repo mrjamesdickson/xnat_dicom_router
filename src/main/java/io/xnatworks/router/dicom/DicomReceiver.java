@@ -12,6 +12,7 @@ import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
 import org.dcm4che3.data.VR;
+import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.net.*;
 import org.dcm4che3.net.pdu.PresentationContext;
@@ -21,11 +22,11 @@ import org.dcm4che3.net.service.DicomServiceRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.security.GeneralSecurityException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -242,6 +243,7 @@ public class DicomReceiver implements AutoCloseable {
 
     /**
      * Create C-STORE SCP handler.
+     * Uses streaming storage to handle large files (2GB+) without loading into memory.
      */
     private BasicCStoreSCP createStoreSCP() {
         return new BasicCStoreSCP("*") {
@@ -256,49 +258,84 @@ public class DicomReceiver implements AutoCloseable {
 
                 log.debug("[{}] Receiving from {}: SOP Instance {}", aeTitle, callingAE, sopInstanceUID);
 
-                // Read the DICOM data
-                Attributes dataset = data.readDataset(transferSyntax);
+                // Create File Meta Information
                 Attributes fmi = as.createFileMetaInformation(sopInstanceUID, sopClassUID, transferSyntax);
 
-                // Get study info for organization
-                String studyUid = dataset.getString(Tag.StudyInstanceUID);
-                String seriesUid = dataset.getString(Tag.SeriesInstanceUID);
-                String modality = dataset.getString(Tag.Modality, "OT");
-                String patientId = dataset.getString(Tag.PatientID, "UNKNOWN");
-
-                if (studyUid == null) {
-                    studyUid = "UNKNOWN_STUDY";
-                }
-                if (seriesUid == null) {
-                    seriesUid = "UNKNOWN_SERIES";
-                }
-
-                // Store the file in incoming/{StudyUID}/{SeriesUID}/{SOPUID}.dcm
-                Path studyDir = incomingDir.resolve(studyUid);
-                Path seriesDir = studyDir.resolve(seriesUid);
-                Files.createDirectories(seriesDir);
-
-                // Use SOP Instance UID as filename
-                String filename = sopInstanceUID + ".dcm";
-                Path outputFile = seriesDir.resolve(filename);
+                // First, stream the data to a temp file to avoid memory issues with large files
+                Path tempDir = incomingDir.resolve(".temp");
+                Files.createDirectories(tempDir);
+                Path tempFile = tempDir.resolve(sopInstanceUID + ".dcm.tmp");
 
                 long fileSize;
-                try (DicomOutputStream dos = new DicomOutputStream(outputFile.toFile())) {
-                    dos.writeDataset(fmi, dataset);
-                    fileSize = outputFile.toFile().length();
+                try {
+                    // Stream data directly to temp file without loading into memory
+                    try (DicomOutputStream dos = new DicomOutputStream(
+                            new BufferedOutputStream(Files.newOutputStream(tempFile)), transferSyntax)) {
+                        dos.writeFileMetaInformation(fmi);
+                        // Copy the PDV data directly - this is the key for large files
+                        data.copyTo(dos);
+                    }
+                    fileSize = Files.size(tempFile);
+
+                    // Now read just the metadata we need for organization (first ~64KB is enough)
+                    String studyUid = null;
+                    String seriesUid = null;
+                    String modality = "OT";
+                    String patientId = "UNKNOWN";
+
+                    try (DicomInputStream dis = new DicomInputStream(
+                            new BufferedInputStream(Files.newInputStream(tempFile)))) {
+                        // Read only the metadata up to PixelData to get UIDs
+                        dis.setIncludeBulkData(DicomInputStream.IncludeBulkData.NO);
+                        Attributes metadata = dis.readDataset(-1, Tag.PixelData);
+                        studyUid = metadata.getString(Tag.StudyInstanceUID);
+                        seriesUid = metadata.getString(Tag.SeriesInstanceUID);
+                        modality = metadata.getString(Tag.Modality, "OT");
+                        patientId = metadata.getString(Tag.PatientID, "UNKNOWN");
+                    } catch (Exception e) {
+                        log.warn("[{}] Could not read metadata from temp file, using defaults: {}",
+                                aeTitle, e.getMessage());
+                    }
+
+                    if (studyUid == null || studyUid.isEmpty()) {
+                        studyUid = "UNKNOWN_STUDY";
+                    }
+                    if (seriesUid == null || seriesUid.isEmpty()) {
+                        seriesUid = "UNKNOWN_SERIES";
+                    }
+
+                    // Create study/series directories
+                    Path studyDir = incomingDir.resolve("study_" + studyUid);
+                    Path seriesDir = studyDir.resolve(seriesUid);
+                    Files.createDirectories(seriesDir);
+
+                    // Move temp file to final location
+                    String filename = sopInstanceUID + ".dcm";
+                    Path outputFile = seriesDir.resolve(filename);
+                    Files.move(tempFile, outputFile, StandardCopyOption.REPLACE_EXISTING);
+
+                    // Update statistics
+                    totalFilesReceived++;
+                    totalBytesReceived += fileSize;
+
+                    if (fileSize > 100 * 1024 * 1024) { // > 100MB
+                        log.info("[{}] Stored large file: {} ({}) from {}",
+                                aeTitle, outputFile.getFileName(), formatBytes(fileSize), callingAE);
+                    } else {
+                        log.debug("[{}] Stored: {} ({} bytes)", aeTitle, outputFile.getFileName(), fileSize);
+                    }
+
+                    // Log receive event
+                    logReceive(callingAE, studyUid, seriesUid, sopInstanceUID, modality, patientId, fileSize);
+
+                } finally {
+                    // Clean up temp file if it still exists (in case of error)
+                    try {
+                        Files.deleteIfExists(tempFile);
+                    } catch (IOException e) {
+                        // Ignore cleanup errors
+                    }
                 }
-
-                // Update statistics
-                totalFilesReceived++;
-                totalBytesReceived += fileSize;
-
-                log.debug("[{}] Stored: {} ({} bytes)", aeTitle, outputFile.getFileName(), fileSize);
-
-                // Log receive event
-                logReceive(callingAE, studyUid, seriesUid, sopInstanceUID, modality, patientId, fileSize);
-
-                // Note: Study completion tracking is handled by FolderWatcher
-                // which monitors the incoming directory for activity
 
                 rsp.setInt(Tag.Status, VR.US, Status.Success);
             }

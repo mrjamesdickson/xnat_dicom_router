@@ -1578,6 +1578,36 @@ public class AppConfig {
         @JsonProperty("lookup_script")
         private String lookupScript;
 
+        /**
+         * Whether to enable date shifting for this broker.
+         * When enabled, dates are shifted by a random number of days that is
+         * consistent per patient (stored in crosswalk).
+         */
+        @JsonProperty("date_shift_enabled")
+        private boolean dateShiftEnabled = false;
+
+        /**
+         * Minimum days to shift (inclusive). Negative values shift dates backwards.
+         * Default: -365 (up to 1 year backwards)
+         */
+        @JsonProperty("date_shift_min_days")
+        private int dateShiftMinDays = -365;
+
+        /**
+         * Maximum days to shift (inclusive). Positive values shift dates forward.
+         * Default: 365 (up to 1 year forwards)
+         */
+        @JsonProperty("date_shift_max_days")
+        private int dateShiftMaxDays = 365;
+
+        /**
+         * Whether to store hashed UIDs in the crosswalk for traceability.
+         * When enabled, Study/Series/SOP Instance UIDs are hashed and the
+         * mapping is stored in the crosswalk database for audit.
+         */
+        @JsonProperty("hash_uids_enabled")
+        private boolean hashUidsEnabled = false;
+
         // Getters and setters
         public String getDescription() { return description; }
         public void setDescription(String description) { this.description = description; }
@@ -1636,10 +1666,22 @@ public class AppConfig {
         public String getLookupScript() { return lookupScript; }
         public void setLookupScript(String lookupScript) { this.lookupScript = lookupScript; }
 
+        public boolean isDateShiftEnabled() { return dateShiftEnabled; }
+        public void setDateShiftEnabled(boolean dateShiftEnabled) { this.dateShiftEnabled = dateShiftEnabled; }
+
+        public int getDateShiftMinDays() { return dateShiftMinDays; }
+        public void setDateShiftMinDays(int dateShiftMinDays) { this.dateShiftMinDays = dateShiftMinDays; }
+
+        public int getDateShiftMaxDays() { return dateShiftMaxDays; }
+        public void setDateShiftMaxDays(int dateShiftMaxDays) { this.dateShiftMaxDays = dateShiftMaxDays; }
+
+        public boolean isHashUidsEnabled() { return hashUidsEnabled; }
+        public void setHashUidsEnabled(boolean hashUidsEnabled) { this.hashUidsEnabled = hashUidsEnabled; }
+
         @Override
         public String toString() {
-            return String.format("HonestBrokerConfig{type='%s', apiHost='%s', enabled=%s}",
-                    brokerType, apiHost, enabled);
+            return String.format("HonestBrokerConfig{type='%s', apiHost='%s', enabled=%s, dateShift=%s, hashUIDs=%s}",
+                    brokerType, apiHost, enabled, dateShiftEnabled, hashUidsEnabled);
         }
     }
 

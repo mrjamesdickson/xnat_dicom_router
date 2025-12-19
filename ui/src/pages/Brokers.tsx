@@ -39,6 +39,12 @@ interface BrokerDetail {
     namingScheme: string
     lookupScript: string
   }
+  dateShift?: {
+    enabled: boolean
+    minDays: number
+    maxDays: number
+  }
+  hashUidsEnabled?: boolean
   crosswalk?: {
     totalMappings: number
   }
@@ -82,6 +88,12 @@ interface BrokerFormData {
   username: string
   password: string
   timeout: number
+  // Date shift fields
+  date_shift_enabled: boolean
+  date_shift_min_days: number
+  date_shift_max_days: number
+  // UID hashing
+  hash_uids_enabled: boolean
 }
 
 const defaultBrokerForm: BrokerFormData = {
@@ -105,7 +117,13 @@ const defaultBrokerForm: BrokerFormData = {
   app_key: '',
   username: '',
   password: '',
-  timeout: 30
+  timeout: 30,
+  // Date shift defaults
+  date_shift_enabled: false,
+  date_shift_min_days: -365,
+  date_shift_max_days: 365,
+  // UID hashing default
+  hash_uids_enabled: false
 }
 
 const NAMING_SCHEMES = [
@@ -139,8 +157,8 @@ export default function Brokers() {
   const { data: brokerDetail, refetch: refetchDetail } = useFetch<BrokerDetail>(
     selectedBroker ? `/brokers/${selectedBroker}` : ''
   )
-  const { data: crosswalkData } = useFetch<CrosswalkResponse>(
-    selectedBroker ? `/brokers/${selectedBroker}/crosswalk` : ''
+  const { data: crosswalkData, refetch: refetchCrosswalk } = useFetch<CrosswalkResponse>(
+    selectedBroker ? `/brokers/${selectedBroker}/crosswalk?limit=${showAllMappings ? 10000 : 100}` : ''
   )
 
   // Form states
@@ -155,6 +173,10 @@ export default function Brokers() {
   const [testResult, setTestResult] = useState<{ idIn: string; idOut: string } | null>(null)
   const [testError, setTestError] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
+
+  // Full mapping view states
+  const [showAllMappings, setShowAllMappings] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   const handleCreateBroker = () => {
     setBrokerForm(defaultBrokerForm)
@@ -185,7 +207,13 @@ export default function Brokers() {
       app_key: '', // Don't pre-fill password fields
       username: broker.auth?.username || '',
       password: '', // Don't pre-fill password fields
-      timeout: broker.connection?.timeout || 30
+      timeout: broker.connection?.timeout || 30,
+      // Date shift fields
+      date_shift_enabled: broker.dateShift?.enabled ?? false,
+      date_shift_min_days: broker.dateShift?.minDays ?? -365,
+      date_shift_max_days: broker.dateShift?.maxDays ?? 365,
+      // UID hashing
+      hash_uids_enabled: broker.hashUidsEnabled ?? false
     })
     setEditingBroker(broker.name)
     setShowCreateForm(true)
@@ -252,6 +280,37 @@ export default function Brokers() {
       setTestError(err instanceof Error ? err.message : 'Lookup failed')
     } finally {
       setTesting(false)
+    }
+  }
+
+  const handleExportCsv = async () => {
+    setExporting(true)
+    try {
+      // Fetch CSV from API
+      const response = await fetch('/api/brokers/crosswalk/export', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('authToken') || ''}`
+        }
+      })
+      if (!response.ok) {
+        throw new Error('Failed to export CSV')
+      }
+      const csvContent = await response.text()
+
+      // Create download link
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `crosswalk_export_${new Date().toISOString().split('T')[0]}.csv`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to export CSV')
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -507,6 +566,65 @@ export default function Brokers() {
                   </label>
                 </div>
 
+                {brokerForm.broker_type === 'local' && (
+                  <>
+                    <h4 style={{ marginTop: '20px', marginBottom: '10px', borderBottom: '1px solid #ddd', paddingBottom: '5px' }}>
+                      Date Shifting
+                    </h4>
+
+                    <div className="form-group checkbox-group">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={brokerForm.date_shift_enabled}
+                          onChange={e => setBrokerForm({ ...brokerForm, date_shift_enabled: e.target.checked })}
+                        />
+                        Enable Date Shifting
+                      </label>
+                      <small className="form-help">Shift dates by a random offset (consistent per patient, stored in crosswalk)</small>
+                    </div>
+
+                    {brokerForm.date_shift_enabled && (
+                      <div className="form-row" style={{ display: 'flex', gap: '20px' }}>
+                        <div className="form-group" style={{ flex: 1 }}>
+                          <label>Min Days</label>
+                          <input
+                            type="number"
+                            value={brokerForm.date_shift_min_days}
+                            onChange={e => setBrokerForm({ ...brokerForm, date_shift_min_days: parseInt(e.target.value) || -365 })}
+                          />
+                          <small className="form-help">e.g. -365 for up to 1 year back</small>
+                        </div>
+                        <div className="form-group" style={{ flex: 1 }}>
+                          <label>Max Days</label>
+                          <input
+                            type="number"
+                            value={brokerForm.date_shift_max_days}
+                            onChange={e => setBrokerForm({ ...brokerForm, date_shift_max_days: parseInt(e.target.value) || 365 })}
+                          />
+                          <small className="form-help">e.g. 365 for up to 1 year forward</small>
+                        </div>
+                      </div>
+                    )}
+
+                    <h4 style={{ marginTop: '20px', marginBottom: '10px', borderBottom: '1px solid #ddd', paddingBottom: '5px' }}>
+                      UID Hashing
+                    </h4>
+
+                    <div className="form-group checkbox-group">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={brokerForm.hash_uids_enabled}
+                          onChange={e => setBrokerForm({ ...brokerForm, hash_uids_enabled: e.target.checked })}
+                        />
+                        Store UID Mappings in Crosswalk
+                      </label>
+                      <small className="form-help">When UIDs are hashed, store the mapping for audit and traceability</small>
+                    </div>
+                  </>
+                )}
+
                 <div className="form-group checkbox-group">
                   <label>
                     <input
@@ -683,8 +801,25 @@ export default function Brokers() {
           </div>
 
           {/* Crosswalk Mappings */}
-          <h3 style={{ marginBottom: '1rem' }}>Recent Mappings</h3>
-          <div className="table-container">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h3 style={{ margin: 0 }}>Crosswalk Mappings</h3>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setShowAllMappings(!showAllMappings)}
+              >
+                {showAllMappings ? 'Show Recent' : `View All (${crosswalkData?.totalMappings || 0})`}
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleExportCsv}
+                disabled={exporting}
+              >
+                {exporting ? 'Exporting...' : 'Export CSV'}
+              </button>
+            </div>
+          </div>
+          <div className="table-container" style={{ maxHeight: showAllMappings ? '600px' : 'auto', overflowY: showAllMappings ? 'auto' : 'visible' }}>
             <table>
               <thead>
                 <tr>
@@ -695,11 +830,15 @@ export default function Brokers() {
                 </tr>
               </thead>
               <tbody>
-                {crosswalkData?.mappings?.slice(0, 20).map((entry, i) => (
+                {(showAllMappings ? crosswalkData?.mappings : crosswalkData?.mappings?.slice(0, 20))?.map((entry, i) => (
                   <tr key={i}>
                     <td><code>{entry.idIn}</code></td>
                     <td><code style={{ color: 'var(--primary)' }}>{entry.idOut}</code></td>
-                    <td>{entry.idType}</td>
+                    <td>
+                      <span className={`status-badge ${entry.idType === 'patient_id' ? 'status-up' : entry.idType === 'session_id' ? 'status-pending' : 'status-down'}`}>
+                        {entry.idType}
+                      </span>
+                    </td>
                     <td>{new Date(entry.createdAt).toLocaleString()}</td>
                   </tr>
                 ))}
@@ -713,9 +852,9 @@ export default function Brokers() {
               </tbody>
             </table>
           </div>
-          {crosswalkData && crosswalkData.mappings && crosswalkData.mappings.length > 20 && (
+          {!showAllMappings && crosswalkData && crosswalkData.mappings && crosswalkData.mappings.length > 20 && (
             <p style={{ color: 'var(--text-light)', fontSize: '0.9em', marginTop: '0.5rem' }}>
-              Showing first 20 of {crosswalkData.totalMappings} mappings
+              Showing first 20 of {crosswalkData.totalMappings} mappings. Click "View All" to see complete list.
             </p>
           )}
         </div>

@@ -9,6 +9,7 @@ package io.xnatworks.router;
 
 import io.xnatworks.router.anon.AnonymizationService;
 import io.xnatworks.router.anon.ScriptLibrary;
+import io.xnatworks.router.anon.StreamingAnonymizer;
 import io.xnatworks.router.archive.ArchiveManager;
 import io.xnatworks.router.broker.HonestBrokerService;
 import io.xnatworks.router.config.AppConfig;
@@ -452,8 +453,11 @@ public class DicomRouter implements Callable<Integer> {
                         }
 
                         // Create ZIP file from DICOM files (with archiving if enabled)
+                        // Pass broker info for date shifting and UID hashing features
+                        String brokerName = routeDest.isUseHonestBroker() ? routeDest.getHonestBrokerName() : null;
                         ZipCreationResult zipResult = createZipFromStudy(study, routeDest.isAnonymize(),
-                                scriptLibrary, routeDest.getEffectiveAnonScript(), route, archiveManager);
+                                scriptLibrary, routeDest.getEffectiveAnonScript(), route, archiveManager,
+                                honestBrokerService, brokerName);
                         File zipFile = zipResult.zipFile;
 
                         try {
@@ -680,6 +684,13 @@ public class DicomRouter implements Callable<Integer> {
         private ZipCreationResult createZipFromStudy(DicomReceiver.ReceivedStudy study, boolean anonymize,
                                          ScriptLibrary scriptLibrary, String anonScriptName,
                                          AppConfig.RouteConfig route, ArchiveManager archiveManager) throws IOException {
+            return createZipFromStudy(study, anonymize, scriptLibrary, anonScriptName, route, archiveManager, null, null);
+        }
+
+        private ZipCreationResult createZipFromStudy(DicomReceiver.ReceivedStudy study, boolean anonymize,
+                                         ScriptLibrary scriptLibrary, String anonScriptName,
+                                         AppConfig.RouteConfig route, ArchiveManager archiveManager,
+                                         HonestBrokerService honestBrokerService, String brokerName) throws IOException {
             Path tempZip = Files.createTempFile("dicom_upload_", ".zip");
 
             // Determine which files to zip - original or anonymized
@@ -688,89 +699,92 @@ public class DicomRouter implements Callable<Integer> {
             String scriptUsed = null;
             Path anonymizedDir = null;
 
-            // Apply anonymization if enabled
+            // Apply anonymization if enabled - use streaming approach to avoid temp directories
             if (anonymize && scriptLibrary != null && anonScriptName != null && !anonScriptName.equals("passthrough")) {
-                Path tempDir = Files.createTempDirectory("anon_temp_");
-                Path anonDir = Files.createTempDirectory("anon_output_");
+                String scriptContent = scriptLibrary.getScriptContent(anonScriptName);
+                if (scriptContent != null) {
+                    try {
+                        // Check if date shifting or UID hashing is enabled via broker config
+                        int dateShiftDays = 0;
+                        boolean hashUidsEnabled = false;
 
-                try {
-                    // Copy source files to temp directory
-                    for (File file : study.getFiles()) {
-                        Files.copy(file.toPath(), tempDir.resolve(file.getName()), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                    }
-
-                    // Get the script content
-                    String scriptContent = scriptLibrary.getScriptContent(anonScriptName);
-                    if (scriptContent != null) {
-                        AnonymizationService anonService = new AnonymizationService(scriptLibrary);
-                        AnonymizationService.AnonymizationResult result = anonService.anonymizeWithScript(
-                                tempDir, anonDir, scriptContent
-                        );
-
-                        if (result.isSuccess() && result.getOutputFiles() > 0) {
-                            // Use anonymized files instead
-                            List<File> anonFiles = new java.util.ArrayList<>();
-                            try (java.util.stream.Stream<Path> paths = Files.list(anonDir)) {
-                                paths.filter(Files::isRegularFile)
-                                     .forEach(p -> anonFiles.add(p.toFile()));
-                            }
-                            filesToZip = anonFiles;
-                            wasAnonymized = true;
-                            scriptUsed = anonScriptName;
-                            anonymizedDir = anonDir;
-                            log.info("Anonymized {} files using script '{}'", result.getOutputFiles(), anonScriptName);
-
-                            // Archive anonymized files if enabled
-                            if (route.isEnableArchive() && archiveManager != null) {
-                                try {
-                                    archiveManager.archiveAnonymized(route.getAeTitle(), study.getStudyUid(),
-                                            anonDir, anonScriptName);
-                                    log.debug("[{}] Archived anonymized files for study {}",
-                                            route.getAeTitle(), study.getStudyUid());
-
-                                    // Generate audit report comparing original vs anonymized
-                                    try {
-                                        archiveManager.generateAuditReport(route.getAeTitle(),
-                                                study.getStudyUid(), anonScriptName);
-                                        log.debug("[{}] Generated audit report for study {}",
-                                                route.getAeTitle(), study.getStudyUid());
-                                    } catch (Exception e) {
-                                        log.warn("[{}] Failed to generate audit report for study {}: {}",
-                                                route.getAeTitle(), study.getStudyUid(), e.getMessage());
-                                    }
-                                } catch (Exception e) {
-                                    log.error("[{}] Failed to archive anonymized files for study {}: {}",
-                                            route.getAeTitle(), study.getStudyUid(), e.getMessage(), e);
+                        if (brokerName != null && honestBrokerService != null) {
+                            // Check if date shifting is enabled for this broker
+                            if (honestBrokerService.isDateShiftEnabled(brokerName)) {
+                                String patientId = extractPatientId(study);
+                                if (patientId != null) {
+                                    dateShiftDays = honestBrokerService.getDateShiftForPatient(brokerName, patientId);
+                                    log.debug("Using date shift of {} days for patient {} (broker: {})",
+                                            dateShiftDays, patientId, brokerName);
                                 }
                             }
-                        } else {
-                            log.warn("Anonymization produced no output files, using original files. Script: {}", anonScriptName);
+                            hashUidsEnabled = honestBrokerService.isHashUidsEnabled(brokerName);
                         }
-                    } else {
-                        log.warn("Script '{}' not found in library, using original files", anonScriptName);
-                    }
 
-                    // Cleanup tempDir (keep anonDir if we need it for archive)
-                    try {
-                        Files.walk(tempDir).sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
-                            try { Files.deleteIfExists(p); } catch (IOException ignored) {}
-                        });
-                    } catch (IOException ignored) {}
-                } catch (Exception e) {
-                    log.error("Anonymization failed, using original files: {}", e.getMessage(), e);
-                    // Cleanup temp dirs on error
-                    try {
-                        Files.walk(tempDir).sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
-                            try { Files.deleteIfExists(p); } catch (IOException ignored) {}
-                        });
-                        Files.walk(anonDir).sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
-                            try { Files.deleteIfExists(p); } catch (IOException ignored) {}
-                        });
-                    } catch (IOException ignored) {}
+                        // Enhance script with date shifting and/or UID hashing if enabled
+                        String enhancedScript = io.xnatworks.router.anon.ScriptEnhancer.enhance(
+                                scriptContent, dateShiftDays, hashUidsEnabled);
+
+                        // Create UID callback to store mappings in crosswalk
+                        final String finalBrokerName = brokerName;
+                        final HonestBrokerService finalBrokerService = honestBrokerService;
+                        StreamingAnonymizer.UidMappingCallback uidCallback = null;
+                        if (hashUidsEnabled && finalBrokerName != null && finalBrokerService != null) {
+                            uidCallback = (originalUid, anonymizedUid, uidType) -> {
+                                try {
+                                    finalBrokerService.storeUidMapping(finalBrokerName, originalUid, anonymizedUid, uidType);
+                                } catch (Exception e) {
+                                    log.warn("Failed to store UID mapping in crosswalk: {}", e.getMessage());
+                                }
+                            };
+                        }
+
+                        // Use StreamingAnonymizer to write directly to ZIP (no temp directories!)
+                        StreamingAnonymizer streamingAnonymizer = new StreamingAnonymizer();
+                        StreamingAnonymizer.StreamingResult result;
+                        if (uidCallback != null) {
+                            result = streamingAnonymizer.anonymizeToZip(
+                                    study.getFiles(), tempZip, enhancedScript, Collections.emptyMap(), uidCallback);
+                        } else {
+                            result = streamingAnonymizer.anonymizeToZip(
+                                    study.getFiles(), tempZip, enhancedScript, Collections.emptyMap());
+                        }
+
+                        if (result.isSuccess() && result.getSuccessFiles() > 0) {
+                            wasAnonymized = true;
+                            scriptUsed = anonScriptName;
+                            log.info("Streaming anonymized {} files using script '{}' (dateShift={}, hashUids={})",
+                                    result.getSuccessFiles(), anonScriptName, dateShiftDays != 0, hashUidsEnabled);
+
+                            // Note: Archive is handled separately - we don't have anonymized files on disk
+                            // to archive in streaming mode. The archive should use the original files
+                            // and the audit report should be generated differently.
+                            if (route != null && route.isEnableArchive() && archiveManager != null) {
+                                log.debug("[{}] Skipping anonymized archive in streaming mode for study {}",
+                                        route.getAeTitle(), study.getStudyUid());
+                            }
+
+                            // Return early - ZIP is already created with anonymized content
+                            return new ZipCreationResult(tempZip.toFile(), wasAnonymized, scriptUsed, null);
+                        } else if (result.getErrorFiles() > 0) {
+                            log.warn("Streaming anonymization had {} errors, falling back to original files",
+                                    result.getErrorFiles());
+                            // Delete the partial ZIP and fall through to non-anonymized path
+                            Files.deleteIfExists(tempZip);
+                            tempZip = Files.createTempFile("dicom_upload_", ".zip");
+                        }
+                    } catch (Exception e) {
+                        log.error("Streaming anonymization failed, using original files: {}", e.getMessage(), e);
+                        // Delete any partial ZIP and fall through
+                        Files.deleteIfExists(tempZip);
+                        tempZip = Files.createTempFile("dicom_upload_", ".zip");
+                    }
+                } else {
+                    log.warn("Script '{}' not found in library, using original files", anonScriptName);
                 }
             }
 
-            // Create ZIP from files (either original or anonymized)
+            // Create ZIP from original files (if anonymization was skipped or failed)
             try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(Files.newOutputStream(tempZip))) {
                 for (File file : filesToZip) {
                     java.util.zip.ZipEntry entry = new java.util.zip.ZipEntry(file.getName());

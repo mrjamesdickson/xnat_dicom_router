@@ -214,6 +214,83 @@ public class HonestBrokerService {
     }
 
     // ========================================================================
+    // Date Shift and UID Hash Methods
+    // ========================================================================
+
+    /**
+     * Get the date shift offset for a patient.
+     * If date shifting is enabled and no offset exists, generates a random one.
+     *
+     * @param brokerName Name of the broker
+     * @param patientId Original PatientID
+     * @return Date shift offset in days, or 0 if date shifting is disabled or broker not found
+     */
+    public int getDateShiftForPatient(String brokerName, String patientId) {
+        HonestBrokerConfig brokerConfig = config.getHonestBroker(brokerName);
+        if (brokerConfig == null || !"local".equalsIgnoreCase(brokerConfig.getBrokerType())) {
+            return 0;
+        }
+
+        LocalHonestBroker localBroker = getLocalBroker(brokerName, brokerConfig);
+        return localBroker.getDateShiftForPatient(patientId);
+    }
+
+    /**
+     * Store a UID mapping if UID hashing is enabled.
+     *
+     * @param brokerName Name of the broker
+     * @param originalUid Original UID
+     * @param hashedUid Hashed/anonymized UID
+     * @param uidType Type of UID (study_uid, series_uid, sop_uid)
+     * @return true if stored or if hashing is disabled, false on error
+     */
+    public boolean storeUidMapping(String brokerName, String originalUid, String hashedUid, String uidType) {
+        HonestBrokerConfig brokerConfig = config.getHonestBroker(brokerName);
+        if (brokerConfig == null || !"local".equalsIgnoreCase(brokerConfig.getBrokerType())) {
+            return true; // Not a local broker, nothing to store
+        }
+
+        LocalHonestBroker localBroker = getLocalBroker(brokerName, brokerConfig);
+        return localBroker.storeUidMapping(originalUid, hashedUid, uidType);
+    }
+
+    /**
+     * Check if date shifting is enabled for a broker.
+     */
+    public boolean isDateShiftEnabled(String brokerName) {
+        HonestBrokerConfig brokerConfig = config.getHonestBroker(brokerName);
+        if (brokerConfig == null) {
+            return false;
+        }
+        return brokerConfig.isDateShiftEnabled();
+    }
+
+    /**
+     * Check if UID hashing crosswalk storage is enabled for a broker.
+     */
+    public boolean isHashUidsEnabled(String brokerName) {
+        HonestBrokerConfig brokerConfig = config.getHonestBroker(brokerName);
+        if (brokerConfig == null) {
+            return false;
+        }
+        return brokerConfig.isHashUidsEnabled();
+    }
+
+    /**
+     * Get the date shift range for a broker.
+     *
+     * @param brokerName Name of the broker
+     * @return int[] with [minDays, maxDays], or [0, 0] if not configured
+     */
+    public int[] getDateShiftRange(String brokerName) {
+        HonestBrokerConfig brokerConfig = config.getHonestBroker(brokerName);
+        if (brokerConfig == null) {
+            return new int[]{0, 0};
+        }
+        return new int[]{brokerConfig.getDateShiftMinDays(), brokerConfig.getDateShiftMaxDays()};
+    }
+
+    // ========================================================================
     // Remote Broker API Implementation
     // ========================================================================
 

@@ -656,6 +656,16 @@ public class HonestBrokersResource {
         behavior.put("cacheMaxSize", broker.getCacheMaxSize());
         map.put("behavior", behavior);
 
+        // Date shifting settings
+        Map<String, Object> dateShift = new LinkedHashMap<>();
+        dateShift.put("enabled", broker.isDateShiftEnabled());
+        dateShift.put("minDays", broker.getDateShiftMinDays());
+        dateShift.put("maxDays", broker.getDateShiftMaxDays());
+        map.put("dateShift", dateShift);
+
+        // UID hashing settings
+        map.put("hashUidsEnabled", broker.isHashUidsEnabled());
+
         // Crosswalk stats for local brokers
         if ("local".equalsIgnoreCase(broker.getBrokerType())) {
             Map<String, Object> crosswalk = new LinkedHashMap<>();
@@ -836,6 +846,45 @@ public class HonestBrokersResource {
         // Handle flat broker_type (snake_case from frontend)
         if (data.containsKey("broker_type")) {
             broker.setBrokerType((String) data.get("broker_type"));
+        }
+
+        // Date shifting settings - can be nested or flat
+        @SuppressWarnings("unchecked")
+        Map<String, Object> dateShift = (Map<String, Object>) data.get("dateShift");
+        if (dateShift != null) {
+            if (dateShift.containsKey("enabled")) {
+                broker.setDateShiftEnabled(toBoolean(dateShift.get("enabled"), false));
+            }
+            if (dateShift.containsKey("minDays")) {
+                broker.setDateShiftMinDays(toInt(dateShift.get("minDays"), -365));
+            }
+            if (dateShift.containsKey("maxDays")) {
+                broker.setDateShiftMaxDays(toInt(dateShift.get("maxDays"), 365));
+            }
+        } else {
+            // Flat structure
+            if (data.containsKey("dateShiftEnabled") || data.containsKey("date_shift_enabled")) {
+                broker.setDateShiftEnabled(toBoolean(
+                    data.containsKey("dateShiftEnabled") ? data.get("dateShiftEnabled") : data.get("date_shift_enabled"),
+                    false));
+            }
+            if (data.containsKey("dateShiftMinDays") || data.containsKey("date_shift_min_days")) {
+                broker.setDateShiftMinDays(toInt(
+                    data.containsKey("dateShiftMinDays") ? data.get("dateShiftMinDays") : data.get("date_shift_min_days"),
+                    -365));
+            }
+            if (data.containsKey("dateShiftMaxDays") || data.containsKey("date_shift_max_days")) {
+                broker.setDateShiftMaxDays(toInt(
+                    data.containsKey("dateShiftMaxDays") ? data.get("dateShiftMaxDays") : data.get("date_shift_max_days"),
+                    365));
+            }
+        }
+
+        // UID hashing settings
+        if (data.containsKey("hashUidsEnabled") || data.containsKey("hash_uids_enabled")) {
+            broker.setHashUidsEnabled(toBoolean(
+                data.containsKey("hashUidsEnabled") ? data.get("hashUidsEnabled") : data.get("hash_uids_enabled"),
+                false));
         }
     }
 

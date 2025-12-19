@@ -54,6 +54,16 @@ public class CrosswalkStore {
     private int backupRetentionDays = DEFAULT_BACKUP_RETENTION_DAYS;
     private int maxBackups = DEFAULT_MAX_BACKUPS;
 
+    // ID types for crosswalk mappings
+    public static final String ID_TYPE_PATIENT_ID = "patient_id";
+    public static final String ID_TYPE_PATIENT_NAME = "patient_name";
+    public static final String ID_TYPE_ACCESSION = "accession";
+    public static final String ID_TYPE_SESSION_ID = "session_id";
+    public static final String ID_TYPE_DATE_SHIFT = "date_shift";  // Stores days offset per patient
+    public static final String ID_TYPE_STUDY_UID = "study_uid";
+    public static final String ID_TYPE_SERIES_UID = "series_uid";
+    public static final String ID_TYPE_SOP_UID = "sop_uid";
+
     public CrosswalkStore(String dataDirectory) {
         this.dbPath = dataDirectory + File.separator + "crosswalk.db";
         this.backupDirectory = dataDirectory + File.separator + "backups";
@@ -336,6 +346,109 @@ public class CrosswalkStore {
             log.error("Failed to get mapping count: {}", e.getMessage(), e);
         }
         return 0;
+    }
+
+    // ========================================================================
+    // Date Shift Methods
+    // ========================================================================
+
+    /**
+     * Get the date shift offset (in days) for a patient.
+     * If no offset exists, generates a new random one and stores it.
+     *
+     * @param brokerName Name of the broker
+     * @param patientId Original PatientID
+     * @param minDays Minimum days to shift (e.g., -365 for up to 1 year back)
+     * @param maxDays Maximum days to shift (e.g., 365 for up to 1 year forward)
+     * @return Date shift offset in days (negative = shift backwards)
+     */
+    public int getOrCreateDateShift(String brokerName, String patientId, int minDays, int maxDays) {
+        // Check if we already have a date shift for this patient
+        String existing = lookup(brokerName, patientId, ID_TYPE_DATE_SHIFT);
+        if (existing != null) {
+            try {
+                return Integer.parseInt(existing);
+            } catch (NumberFormatException e) {
+                log.warn("Invalid date shift value for patient {}: {}", patientId, existing);
+            }
+        }
+
+        // Generate a random offset within the specified range
+        java.util.Random random = new java.util.Random();
+        int offset = minDays + random.nextInt(maxDays - minDays + 1);
+
+        // Store the offset
+        store(brokerName, patientId, String.valueOf(offset), ID_TYPE_DATE_SHIFT);
+        logOperation(brokerName, "create_date_shift", patientId, String.valueOf(offset),
+                ID_TYPE_DATE_SHIFT, null, null, null,
+                String.format("Random date shift: %d days (range: %d to %d)", offset, minDays, maxDays));
+
+        log.info("Created date shift for patient {}: {} days", patientId, offset);
+        return offset;
+    }
+
+    /**
+     * Get existing date shift for a patient without creating a new one.
+     *
+     * @param brokerName Name of the broker
+     * @param patientId Original PatientID
+     * @return Date shift offset in days, or null if not found
+     */
+    public Integer getDateShift(String brokerName, String patientId) {
+        String existing = lookup(brokerName, patientId, ID_TYPE_DATE_SHIFT);
+        if (existing != null) {
+            try {
+                return Integer.parseInt(existing);
+            } catch (NumberFormatException e) {
+                log.warn("Invalid date shift value for patient {}: {}", patientId, existing);
+            }
+        }
+        return null;
+    }
+
+    // ========================================================================
+    // UID Hash Methods
+    // ========================================================================
+
+    /**
+     * Store a UID mapping (original UID -> hashed UID).
+     *
+     * @param brokerName Name of the broker
+     * @param originalUid Original UID
+     * @param hashedUid Hashed/anonymized UID
+     * @param uidType Type of UID (study_uid, series_uid, sop_uid)
+     * @return true if successful
+     */
+    public boolean storeUidMapping(String brokerName, String originalUid, String hashedUid, String uidType) {
+        boolean success = store(brokerName, originalUid, hashedUid, uidType);
+        if (success) {
+            logOperation(brokerName, "uid_hash", originalUid, hashedUid, uidType, null, null, null, null);
+        }
+        return success;
+    }
+
+    /**
+     * Lookup a hashed UID from the original UID.
+     *
+     * @param brokerName Name of the broker
+     * @param originalUid Original UID
+     * @param uidType Type of UID (study_uid, series_uid, sop_uid)
+     * @return Hashed UID, or null if not found
+     */
+    public String lookupHashedUid(String brokerName, String originalUid, String uidType) {
+        return lookup(brokerName, originalUid, uidType);
+    }
+
+    /**
+     * Reverse lookup - get original UID from hashed UID.
+     *
+     * @param brokerName Name of the broker
+     * @param hashedUid Hashed/anonymized UID
+     * @param uidType Type of UID (study_uid, series_uid, sop_uid)
+     * @return Original UID, or null if not found
+     */
+    public String lookupOriginalUid(String brokerName, String hashedUid, String uidType) {
+        return reverseLookup(brokerName, hashedUid, uidType);
     }
 
     // ========================================================================
