@@ -8,10 +8,13 @@
 package io.xnatworks.router.api;
 
 import io.xnatworks.router.anon.ScriptLibrary;
+import io.xnatworks.router.archive.ArchiveManager;
 import io.xnatworks.router.broker.HonestBrokerService;
 import io.xnatworks.router.config.AppConfig;
 import io.xnatworks.router.index.DicomIndexer;
 import io.xnatworks.router.metrics.MetricsCollector;
+import io.xnatworks.router.ocr.OcrService;
+import io.xnatworks.router.review.DicomComparisonService;
 import io.xnatworks.router.routing.DestinationManager;
 import io.xnatworks.router.store.RouterStore;
 import io.xnatworks.router.tracking.TransferTracker;
@@ -47,6 +50,8 @@ public class AdminServer {
     private final RouterStore routerStore;
     private final DicomIndexer dicomIndexer;
     private final boolean headless;
+    private final ArchiveManager archiveManager;
+    private final OcrService ocrService;
 
     private Server server;
 
@@ -54,7 +59,7 @@ public class AdminServer {
                        DestinationManager destinationManager,
                        TransferTracker transferTracker,
                        ScriptLibrary scriptLibrary) {
-        this(port, host, config, destinationManager, transferTracker, scriptLibrary, null, null, null, false);
+        this(port, host, config, destinationManager, transferTracker, scriptLibrary, null, null, null, false, null, null);
     }
 
     public AdminServer(int port, String host, AppConfig config,
@@ -62,7 +67,7 @@ public class AdminServer {
                        TransferTracker transferTracker,
                        ScriptLibrary scriptLibrary,
                        boolean headless) {
-        this(port, host, config, destinationManager, transferTracker, scriptLibrary, null, null, null, headless);
+        this(port, host, config, destinationManager, transferTracker, scriptLibrary, null, null, null, headless, null, null);
     }
 
     public AdminServer(int port, String host, AppConfig config,
@@ -71,7 +76,7 @@ public class AdminServer {
                        ScriptLibrary scriptLibrary,
                        MetricsCollector metricsCollector,
                        boolean headless) {
-        this(port, host, config, destinationManager, transferTracker, scriptLibrary, metricsCollector, null, null, headless);
+        this(port, host, config, destinationManager, transferTracker, scriptLibrary, metricsCollector, null, null, headless, null, null);
     }
 
     public AdminServer(int port, String host, AppConfig config,
@@ -82,6 +87,19 @@ public class AdminServer {
                        RouterStore routerStore,
                        DicomIndexer dicomIndexer,
                        boolean headless) {
+        this(port, host, config, destinationManager, transferTracker, scriptLibrary, metricsCollector, routerStore, dicomIndexer, headless, null, null);
+    }
+
+    public AdminServer(int port, String host, AppConfig config,
+                       DestinationManager destinationManager,
+                       TransferTracker transferTracker,
+                       ScriptLibrary scriptLibrary,
+                       MetricsCollector metricsCollector,
+                       RouterStore routerStore,
+                       DicomIndexer dicomIndexer,
+                       boolean headless,
+                       ArchiveManager archiveManager,
+                       OcrService ocrService) {
         this.port = port;
         this.host = host;
         this.config = config;
@@ -92,6 +110,8 @@ public class AdminServer {
         this.routerStore = routerStore;
         this.dicomIndexer = dicomIndexer;
         this.headless = headless;
+        this.archiveManager = archiveManager;
+        this.ocrService = ocrService;
     }
 
     /**
@@ -129,6 +149,10 @@ public class AdminServer {
         final SearchResource searchResource = (routerStore != null && dicomIndexer != null)
                 ? new SearchResource(config, routerStore, dicomIndexer) : null;
         final AuditResource auditResource = new AuditResource(scriptLibrary, java.nio.file.Paths.get(config.getDataDirectory()));
+        final DicomComparisonService comparisonService = (archiveManager != null)
+                ? new DicomComparisonService(archiveManager, ocrService) : null;
+        final DicomCompareResource dicomCompareResource = (comparisonService != null)
+                ? new DicomCompareResource(comparisonService, config) : null;
         final AuthFilter authFilter = new AuthFilter(config);
 
         ResourceConfig resourceConfig = new ResourceConfig();
@@ -157,6 +181,9 @@ public class AdminServer {
                     bind(searchResource).to(SearchResource.class);
                 }
                 bind(auditResource).to(AuditResource.class);
+                if (dicomCompareResource != null) {
+                    bind(dicomCompareResource).to(DicomCompareResource.class);
+                }
             }
         });
 
@@ -181,6 +208,9 @@ public class AdminServer {
             resourceConfig.register(SearchResource.class);
         }
         resourceConfig.register(AuditResource.class);
+        if (dicomCompareResource != null) {
+            resourceConfig.register(DicomCompareResource.class);
+        }
 
         // Register auth filter
         resourceConfig.register(authFilter);

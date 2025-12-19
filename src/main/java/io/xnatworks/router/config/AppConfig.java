@@ -103,6 +103,7 @@ public class AppConfig {
     private ResilienceConfig resilience = new ResilienceConfig();
     private NotificationConfig notifications = new NotificationConfig();
     private OcrConfig ocr = new OcrConfig();
+    private FeaturesConfig features = new FeaturesConfig();
 
     /**
      * Honest Broker configurations - maps broker name to config.
@@ -287,6 +288,9 @@ public class AppConfig {
 
     public OcrConfig getOcr() { return ocr; }
     public void setOcr(OcrConfig ocr) { this.ocr = ocr; }
+
+    public FeaturesConfig getFeatures() { return features; }
+    public void setFeatures(FeaturesConfig features) { this.features = features; }
 
     public NotificationConfig getNotifications() { return notifications; }
     public void setNotifications(NotificationConfig notifications) { this.notifications = notifications; }
@@ -1797,5 +1801,53 @@ public class AppConfig {
 
         public String getDescription() { return description; }
         public void setDescription(String description) { this.description = description; }
+    }
+
+    /**
+     * Feature flags configuration.
+     * Controls which features are enabled/visible in the UI.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class FeaturesConfig {
+        /**
+         * Enable DICOM indexing and search functionality.
+         * When false, Index and Search pages are hidden from the UI.
+         * Defaults to false (disabled) as this feature is experimental.
+         */
+        @JsonProperty("enable_indexing")
+        private boolean enableIndexing = false;
+
+        /**
+         * Enable DICOM review/comparison functionality.
+         * When false, Review page is hidden from the UI.
+         */
+        @JsonProperty("enable_review")
+        private boolean enableReview = true;
+
+        /**
+         * Enable OCR-based PHI detection in the UI.
+         * When false, OCR page is hidden from the UI.
+         */
+        @JsonProperty("enable_ocr")
+        private boolean enableOcr = true;
+
+        /**
+         * Enable Query/Retrieve (C-FIND/C-MOVE) functionality.
+         * When false, Query/Retrieve page is hidden from the UI.
+         */
+        @JsonProperty("enable_query_retrieve")
+        private boolean enableQueryRetrieve = true;
+
+        public boolean isEnableIndexing() { return enableIndexing; }
+        public void setEnableIndexing(boolean enableIndexing) { this.enableIndexing = enableIndexing; }
+
+        public boolean isEnableReview() { return enableReview; }
+        public void setEnableReview(boolean enableReview) { this.enableReview = enableReview; }
+
+        public boolean isEnableOcr() { return enableOcr; }
+        public void setEnableOcr(boolean enableOcr) { this.enableOcr = enableOcr; }
+
+        public boolean isEnableQueryRetrieve() { return enableQueryRetrieve; }
+        public void setEnableQueryRetrieve(boolean enableQueryRetrieve) { this.enableQueryRetrieve = enableQueryRetrieve; }
     }
 }

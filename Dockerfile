@@ -33,7 +33,7 @@ LABEL maintainer="XNATWorks <support@xnatworks.com>"
 LABEL org.opencontainers.image.title="XNAT DICOM Router"
 LABEL org.opencontainers.image.description="DICOM routing and de-identification service for XNAT"
 LABEL org.opencontainers.image.vendor="XNATWorks"
-LABEL org.opencontainers.image.version="2.0.0"
+LABEL org.opencontainers.image.version="2.1.0"
 
 # Create non-root user
 RUN groupadd -r dicom && useradd -r -g dicom dicom

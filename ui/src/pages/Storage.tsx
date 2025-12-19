@@ -751,13 +751,21 @@ export default function Storage() {
                 </button>
               )}
               {selectedStudy.status === 'completed' && (
-                <button
-                  className="btn btn-primary"
-                  onClick={() => handleReprocessStudy(selectedStudy.route, selectedStudy.folder)}
-                  disabled={actionInProgress !== null}
-                >
-                  {actionInProgress === `reprocess-${selectedStudy.folder}` ? 'Reprocessing...' : 'Reprocess'}
-                </button>
+                <>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => navigate(`/review?aeTitle=${encodeURIComponent(selectedStudy.route)}&studyUid=${encodeURIComponent(selectedStudy.folder)}`)}
+                  >
+                    Compare
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => handleReprocessStudy(selectedStudy.route, selectedStudy.folder)}
+                    disabled={actionInProgress !== null}
+                  >
+                    {actionInProgress === `reprocess-${selectedStudy.folder}` ? 'Reprocessing...' : 'Reprocess'}
+                  </button>
+                </>
               )}
               {(selectedStudy.status === 'failed' || selectedStudy.status === 'completed') && (
                 <button
@@ -919,14 +927,23 @@ export default function Storage() {
                             </button>
                           )}
                           {status === 'completed' && (
-                            <button
-                              className="btn btn-primary"
-                              style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
-                              onClick={() => handleReprocessStudy(selectedRoute, item.name)}
-                              disabled={actionInProgress !== null}
-                            >
-                              Reprocess
-                            </button>
+                            <>
+                              <button
+                                className="btn btn-secondary"
+                                style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
+                                onClick={() => navigate(`/review?aeTitle=${encodeURIComponent(selectedRoute)}&studyUid=${encodeURIComponent(item.name)}`)}
+                              >
+                                Compare
+                              </button>
+                              <button
+                                className="btn btn-primary"
+                                style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
+                                onClick={() => handleReprocessStudy(selectedRoute, item.name)}
+                                disabled={actionInProgress !== null}
+                              >
+                                Reprocess
+                              </button>
+                            </>
                           )}
                           {(status === 'failed' || status === 'completed') && (
                             <button

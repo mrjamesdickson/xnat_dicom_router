@@ -41,7 +41,7 @@ public class StatusResource {
         Map<String, Object> status = new LinkedHashMap<>();
 
         // Basic info
-        status.put("version", "2.0.0");
+        status.put("version", "2.1.0");
         status.put("startTime", startTime.toString());
         status.put("uptime", getUptime());
 

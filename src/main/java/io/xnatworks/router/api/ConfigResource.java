@@ -89,6 +89,14 @@ public class ConfigResource {
         notifMap.put("notifyOnDailySummary", config.getNotifications().isNotifyOnDailySummary());
         result.put("notifications", notifMap);
 
+        // Features config
+        Map<String, Object> featuresMap = new LinkedHashMap<>();
+        featuresMap.put("enableIndexing", config.getFeatures().isEnableIndexing());
+        featuresMap.put("enableReview", config.getFeatures().isEnableReview());
+        featuresMap.put("enableOcr", config.getFeatures().isEnableOcr());
+        featuresMap.put("enableQueryRetrieve", config.getFeatures().isEnableQueryRetrieve());
+        result.put("features", featuresMap);
+
         return Response.ok(result).build();
     }
 

@@ -51,7 +51,7 @@ import java.util.concurrent.Callable;
  */
 @Command(name = "dicom-router",
         mixinStandardHelpOptions = true,
-        version = "2.0.0",
+        version = "2.1.0",
         description = "XNAT DICOM Router - Route DICOM to multiple destinations",
         subcommands = {
                 DicomRouter.StartCommand.class,
@@ -208,6 +208,18 @@ public class DicomRouter implements Callable<Integer> {
             // Start admin server if enabled
             io.xnatworks.router.api.AdminServer adminServer = null;
             if (!noAdmin) {
+                // Initialize OCR service for comparison feature
+                io.xnatworks.router.ocr.OcrService ocrService = null;
+                try {
+                    ocrService = new io.xnatworks.router.ocr.OcrService();
+                    if (!ocrService.isAvailable()) {
+                        log.warn("OCR service not available (tessdata not found) - DICOM comparison will work without OCR overlay");
+                        ocrService = null;
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to initialize OCR service: {} - DICOM comparison will work without OCR overlay", e.getMessage());
+                }
+
                 adminServer = new io.xnatworks.router.api.AdminServer(
                         effectiveAdminPort,
                         "localhost",
@@ -218,7 +230,9 @@ public class DicomRouter implements Callable<Integer> {
                         metricsCollector,  // metrics collector for dashboard
                         routerStore,       // router store for search functionality
                         dicomIndexer,      // DICOM indexer for search
-                        headless           // headless mode = API only, no UI
+                        headless,          // headless mode = API only, no UI
+                        archiveManager,    // archive manager for DICOM comparison
+                        ocrService         // OCR service for pixel PHI detection
                 );
                 adminServer.start();
             }

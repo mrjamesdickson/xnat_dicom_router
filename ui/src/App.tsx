@@ -16,9 +16,21 @@ import OCR from './pages/OCR'
 import QueryRetrieve from './pages/QueryRetrieve'
 import Search from './pages/Search'
 import Index from './pages/Index'
-import { checkAuth, setAuthToken, clearAuthToken, getAuthToken } from './hooks/useApi'
+import DicomReview from './pages/DicomReview'
+import { checkAuth, setAuthToken, clearAuthToken, useFetch } from './hooks/useApi'
 
-const APP_VERSION = '2.0.0'
+const APP_VERSION = '2.1.0'
+
+interface FeaturesConfig {
+  enableIndexing: boolean
+  enableReview: boolean
+  enableOcr: boolean
+  enableQueryRetrieve: boolean
+}
+
+interface ConfigResponse {
+  features: FeaturesConfig
+}
 const BUILD_TIME = '__BUILD_TIME__'
 
 interface AboutModalProps {
@@ -168,6 +180,7 @@ interface NavItem {
   path: string
   label: string
   icon: string
+  featureKey?: keyof FeaturesConfig  // Optional feature flag to check
 }
 
 interface NavSection {
@@ -189,23 +202,24 @@ const NAV_SECTIONS: NavSection[] = [
       { path: '/destinations', label: 'Destinations', icon: '' },
       { path: '/brokers', label: 'Brokers', icon: '' },
       { path: '/scripts', label: 'Scripts', icon: '' },
-      { path: '/ocr', label: 'OCR', icon: '' },
+      { path: '/ocr', label: 'OCR', icon: '', featureKey: 'enableOcr' },
     ]
   },
   {
     title: 'Operations',
     items: [
       { path: '/transfers', label: 'Transfers', icon: '' },
-      { path: '/query-retrieve', label: 'Query/Retrieve', icon: '' },
+      { path: '/query-retrieve', label: 'Query/Retrieve', icon: '', featureKey: 'enableQueryRetrieve' },
       { path: '/import', label: 'Import', icon: '' },
       { path: '/storage', label: 'Storage', icon: '' },
+      { path: '/review', label: 'Review', icon: '', featureKey: 'enableReview' },
     ]
   },
   {
     title: 'Data',
     items: [
-      { path: '/index', label: 'Index', icon: '' },
-      { path: '/search', label: 'Search', icon: '' },
+      { path: '/index', label: 'Index', icon: '', featureKey: 'enableIndexing' },
+      { path: '/search', label: 'Search', icon: '', featureKey: 'enableIndexing' },
     ]
   },
   {
@@ -228,6 +242,23 @@ function App() {
     const saved = localStorage.getItem('theme')
     return (saved as Theme) || 'light'
   })
+
+  // Fetch feature flags from config
+  const { data: configData } = useFetch<ConfigResponse>('/config')
+  const features = configData?.features || {
+    enableIndexing: false,  // Disabled by default (experimental)
+    enableReview: true,
+    enableOcr: true,
+    enableQueryRetrieve: true
+  }
+
+  // Filter navigation based on feature flags
+  const filteredNavSections = NAV_SECTIONS.map(section => ({
+    ...section,
+    items: section.items.filter(item =>
+      !item.featureKey || features[item.featureKey]
+    )
+  })).filter(section => section.items.length > 0)
 
   // Apply theme to document
   useEffect(() => {
@@ -295,7 +326,7 @@ function App() {
         </div>
 
         <nav className="sidebar-nav">
-          {NAV_SECTIONS.map((section) => (
+          {filteredNavSections.map((section) => (
             <div key={section.title} className="nav-section">
               {!sidebarCollapsed && <div className="nav-section-title">{section.title}</div>}
               {section.items.map((item) => (
@@ -329,7 +360,7 @@ function App() {
         <header className="top-header">
           <div className="header-left">
             <h1 className="page-title">
-              {NAV_SECTIONS.flatMap(s => s.items).find(item =>
+              {filteredNavSections.flatMap(s => s.items).find(item =>
                 item.path === location.pathname ||
                 (item.path === '/' && location.pathname === '/')
               )?.label || 'DICOM Router'}
@@ -379,6 +410,7 @@ function App() {
             <Route path="/index" element={<Index />} />
             <Route path="/search" element={<Search />} />
             <Route path="/dicom-viewer" element={<DicomViewer />} />
+            <Route path="/review" element={<DicomReview />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
