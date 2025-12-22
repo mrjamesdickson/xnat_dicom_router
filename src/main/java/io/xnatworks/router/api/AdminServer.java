@@ -150,7 +150,7 @@ public class AdminServer {
                 ? new SearchResource(config, routerStore, dicomIndexer) : null;
         final AuditResource auditResource = new AuditResource(scriptLibrary, java.nio.file.Paths.get(config.getDataDirectory()));
         final DicomComparisonService comparisonService = (archiveManager != null)
-                ? new DicomComparisonService(archiveManager, ocrService) : null;
+                ? new DicomComparisonService(archiveManager, ocrService, honestBrokerService.getCrosswalkStore()) : null;
         final DicomCompareResource dicomCompareResource = (comparisonService != null)
                 ? new DicomCompareResource(comparisonService, config) : null;
         final AuthFilter authFilter = new AuthFilter(config);

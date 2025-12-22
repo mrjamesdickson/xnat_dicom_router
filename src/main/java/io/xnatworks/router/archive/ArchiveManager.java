@@ -143,6 +143,124 @@ public class ArchiveManager {
     }
 
     /**
+     * Archive anonymized DICOM files from a directory with broker info.
+     * Delegates to archiveAnonymized and adds broker info to metadata.
+     *
+     * @param aeTitle         The AE Title (route) for this study
+     * @param studyUid        The Study Instance UID
+     * @param anonymizedDir   Directory containing anonymized files
+     * @param scriptName      Name of the anonymization script used
+     * @param brokerName      Name of the honest broker used (may be null)
+     * @param hashUidsEnabled Whether UID hashing was enabled
+     * @return Path to the archived anonymized files directory
+     */
+    public Path archiveAnonymized(String aeTitle, String studyUid, Path anonymizedDir,
+                                  String scriptName, String brokerName, boolean hashUidsEnabled) throws IOException {
+        Path result = archiveAnonymized(aeTitle, studyUid, anonymizedDir, scriptName);
+        updateBrokerInfo(aeTitle, studyUid, brokerName, hashUidsEnabled);
+        return result;
+    }
+
+    /**
+     * Archive anonymized DICOM files from a ZIP file.
+     * Extracts files from the ZIP to archive/{date}/study_{uid}/anonymized/
+     *
+     * This method supports the streaming anonymization workflow where anonymized files
+     * are written directly to a ZIP without intermediate disk storage.
+     *
+     * @param aeTitle    The AE Title (route) for this study
+     * @param studyUid   The Study Instance UID
+     * @param zipFile    ZIP file containing anonymized DICOM files
+     * @param scriptName Name of the anonymization script used
+     * @return Path to the archived anonymized files directory
+     */
+    public Path archiveAnonymizedFromZip(String aeTitle, String studyUid, Path zipFile, String scriptName) throws IOException {
+        log.info("[{}] Archiving anonymized files from ZIP for study {} (script: {})", aeTitle, studyUid, scriptName);
+
+        Path archiveStudyDir = getArchiveStudyDir(aeTitle, studyUid);
+        Path archiveAnonDir = archiveStudyDir.resolve(ANONYMIZED_DIR);
+        Files.createDirectories(archiveAnonDir);
+
+        int filesExtracted = 0;
+
+        // Use ZipFile instead of ZipInputStream for more reliable extraction
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(zipFile.toFile())) {
+            java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zip.entries();
+            byte[] buffer = new byte[8192];
+
+            while (entries.hasMoreElements()) {
+                java.util.zip.ZipEntry entry = entries.nextElement();
+                if (entry.isDirectory()) {
+                    continue;
+                }
+
+                String fileName = entry.getName();
+                // Handle nested paths in ZIP - extract just the filename
+                if (fileName.contains("/")) {
+                    fileName = fileName.substring(fileName.lastIndexOf('/') + 1);
+                }
+                if (fileName.contains("\\")) {
+                    fileName = fileName.substring(fileName.lastIndexOf('\\') + 1);
+                }
+
+                Path destFile = archiveAnonDir.resolve(fileName);
+
+                try (java.io.InputStream is = zip.getInputStream(entry);
+                     java.io.OutputStream fos = Files.newOutputStream(destFile)) {
+                    int len;
+                    while ((len = is.read(buffer)) > 0) {
+                        fos.write(buffer, 0, len);
+                    }
+                }
+                filesExtracted++;
+                log.trace("[{}] Extracted file {} from ZIP", aeTitle, fileName);
+            }
+        }
+
+        log.debug("[{}] Extracted {} anonymized files from ZIP to archive", aeTitle, filesExtracted);
+
+        // Update metadata
+        ArchiveMetadata metadata = loadMetadata(archiveStudyDir);
+        if (metadata == null) {
+            metadata = new ArchiveMetadata();
+            metadata.setStudyUid(studyUid);
+            metadata.setAeTitle(aeTitle);
+            metadata.setArchivedAt(LocalDateTime.now());
+        }
+        metadata.setAnonymizedAt(LocalDateTime.now());
+        metadata.setAnonymizedFileCount(filesExtracted);
+        metadata.setAnonymizationScript(scriptName);
+
+        saveMetadata(archiveStudyDir, metadata);
+
+        return archiveAnonDir;
+    }
+
+    /**
+     * Update broker information in archive metadata.
+     *
+     * @param aeTitle         The AE Title (route) for this study
+     * @param studyUid        The Study Instance UID
+     * @param brokerName      Name of the honest broker used (may be null)
+     * @param hashUidsEnabled Whether UID hashing was enabled
+     */
+    public void updateBrokerInfo(String aeTitle, String studyUid, String brokerName, boolean hashUidsEnabled) throws IOException {
+        Path archiveStudyDir = findArchivedStudyDir(aeTitle, studyUid);
+        if (archiveStudyDir == null) {
+            log.warn("[{}] Cannot update broker info - archived study not found: {}", aeTitle, studyUid);
+            return;
+        }
+
+        ArchiveMetadata metadata = loadMetadata(archiveStudyDir);
+        if (metadata != null) {
+            metadata.setHonestBrokerName(brokerName);
+            metadata.setHashUidsEnabled(hashUidsEnabled);
+            saveMetadata(archiveStudyDir, metadata);
+            log.debug("[{}] Updated broker info: broker={}, hashUids={}", aeTitle, brokerName, hashUidsEnabled);
+        }
+    }
+
+    /**
      * Generate an audit report comparing original and anonymized files.
      * Saves to archive/{date}/study_{uid}/audit_report.json
      *
@@ -415,12 +533,13 @@ public class ArchiveManager {
         return deleted;
     }
 
-    // Private helper methods
+    // Helper methods
 
     /**
      * Get the archive directory path for a study (creates date-based structure).
+     * Made public to allow DicomRouter to use it for dual-write approach.
      */
-    private Path getArchiveStudyDir(String aeTitle, String studyUid) {
+    public Path getArchiveStudyDir(String aeTitle, String studyUid) {
         String dateStr = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
         String studyDirName = "study_" + sanitizeUid(studyUid);
         return baseDir.resolve(aeTitle).resolve(ARCHIVE_DIR).resolve(dateStr).resolve(studyDirName);
@@ -686,6 +805,8 @@ public class ArchiveManager {
         private String anonymizationScript;
         private int phiFieldsModified;
         private int conformanceIssues;
+        private String honestBrokerName;
+        private boolean hashUidsEnabled;
 
         public String getStudyUid() { return studyUid; }
         public void setStudyUid(String studyUid) { this.studyUid = studyUid; }
@@ -722,6 +843,12 @@ public class ArchiveManager {
 
         public int getConformanceIssues() { return conformanceIssues; }
         public void setConformanceIssues(int conformanceIssues) { this.conformanceIssues = conformanceIssues; }
+
+        public String getHonestBrokerName() { return honestBrokerName; }
+        public void setHonestBrokerName(String honestBrokerName) { this.honestBrokerName = honestBrokerName; }
+
+        public boolean isHashUidsEnabled() { return hashUidsEnabled; }
+        public void setHashUidsEnabled(boolean hashUidsEnabled) { this.hashUidsEnabled = hashUidsEnabled; }
     }
 
     /**

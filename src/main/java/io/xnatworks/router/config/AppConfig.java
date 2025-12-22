@@ -1612,6 +1612,35 @@ public class AppConfig {
         @JsonProperty("hash_uids_enabled")
         private boolean hashUidsEnabled = false;
 
+        /**
+         * List of DICOM tags to use for honest broker lookup.
+         * These tags must be present in the DICOM data for de-identification to proceed.
+         * Common values: "PatientID", "AccessionNumber", "StudyInstanceUID"
+         * Default: ["PatientID"] - only PatientID is required
+         *
+         * When AccessionNumber is included and present, it will be used to generate
+         * a unique session label. When AccessionNumber is not in this list or not
+         * present in the DICOM, the session label will be generated from StudyInstanceUID.
+         */
+        @JsonProperty("lookup_tags")
+        private java.util.List<String> lookupTags = java.util.Arrays.asList("PatientID");
+
+        /**
+         * Whether to require AccessionNumber for session labeling.
+         * When true (default for backward compatibility), AccessionNumber must be present.
+         * When false, will use StudyInstanceUID hash if AccessionNumber is missing.
+         */
+        @JsonProperty("require_accession_number")
+        private boolean requireAccessionNumber = true;
+
+        /**
+         * Fallback tag to use for session labeling when AccessionNumber is missing.
+         * Default: "StudyInstanceUID" - uses a hash of the study UID
+         * Other options: "StudyDate", "SeriesInstanceUID", or any DICOM tag keyword
+         */
+        @JsonProperty("session_label_fallback_tag")
+        private String sessionLabelFallbackTag = "StudyInstanceUID";
+
         // Getters and setters
         public String getDescription() { return description; }
         public void setDescription(String description) { this.description = description; }
@@ -1682,10 +1711,26 @@ public class AppConfig {
         public boolean isHashUidsEnabled() { return hashUidsEnabled; }
         public void setHashUidsEnabled(boolean hashUidsEnabled) { this.hashUidsEnabled = hashUidsEnabled; }
 
+        public java.util.List<String> getLookupTags() { return lookupTags; }
+        public void setLookupTags(java.util.List<String> lookupTags) { this.lookupTags = lookupTags; }
+
+        public boolean isRequireAccessionNumber() { return requireAccessionNumber; }
+        public void setRequireAccessionNumber(boolean requireAccessionNumber) { this.requireAccessionNumber = requireAccessionNumber; }
+
+        public String getSessionLabelFallbackTag() { return sessionLabelFallbackTag; }
+        public void setSessionLabelFallbackTag(String sessionLabelFallbackTag) { this.sessionLabelFallbackTag = sessionLabelFallbackTag; }
+
+        /**
+         * Check if a specific tag is required for lookup.
+         */
+        public boolean requiresTag(String tagName) {
+            return lookupTags != null && lookupTags.contains(tagName);
+        }
+
         @Override
         public String toString() {
-            return String.format("HonestBrokerConfig{type='%s', apiHost='%s', enabled=%s, dateShift=%s, hashUIDs=%s}",
-                    brokerType, apiHost, enabled, dateShiftEnabled, hashUidsEnabled);
+            return String.format("HonestBrokerConfig{type='%s', apiHost='%s', enabled=%s, dateShift=%s, hashUIDs=%s, lookupTags=%s, requireAccession=%s}",
+                    brokerType, apiHost, enabled, dateShiftEnabled, hashUidsEnabled, lookupTags, requireAccessionNumber);
         }
     }
 

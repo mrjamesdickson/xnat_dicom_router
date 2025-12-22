@@ -484,38 +484,24 @@ public class DicomRouter implements Callable<Integer> {
                             // Generate subject ID and session label - use honest broker if configured
                             String subjectId;
                             String sessionLabel;
-                            if (routeDest.isUseHonestBroker() && routeDest.getHonestBrokerName() != null && honestBrokerService != null) {
+                            if (routeDest.isUseHonestBroker() && brokerName != null && honestBrokerService != null) {
+                                AppConfig.HonestBrokerConfig brokerConfig = honestBrokerService.getBrokerConfig(brokerName);
+
                                 String originalPatientId = extractPatientId(study);
-                                String deidentifiedPatientId = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalPatientId);
+                                String deidentifiedPatientId = honestBrokerService.lookup(brokerName, originalPatientId);
                                 if (deidentifiedPatientId != null) {
                                     subjectId = deidentifiedPatientId;
                                     log.debug("[{}] Honest broker '{}' mapped patient ID '{}' -> '{}'",
-                                            route.getAeTitle(), routeDest.getHonestBrokerName(), originalPatientId, subjectId);
+                                            route.getAeTitle(), brokerName, originalPatientId, subjectId);
 
-                                    // For remote brokers, also lookup accession number for session label
-                                    // Session format: {deidentifiedPatientId}-{deidentifiedAccessionNumber}
-                                    String originalAccession = extractAccessionNumber(study);
-                                    if ("UNKNOWN".equals(originalAccession) || originalAccession == null || originalAccession.isEmpty()) {
-                                        // AccessionNumber not present in DICOM - fail transfer
-                                        log.error("[{}] Honest broker '{}' cannot process - AccessionNumber is missing from DICOM data",
-                                                route.getAeTitle(), routeDest.getHonestBrokerName());
-                                        throw new RuntimeException("AccessionNumber is required for honest broker de-identification but was not found in DICOM");
-                                    }
-                                    String deidentifiedAccession = honestBrokerService.lookup(routeDest.getHonestBrokerName(), originalAccession);
-                                    if (deidentifiedAccession != null) {
-                                        sessionLabel = deidentifiedPatientId + "-" + deidentifiedAccession;
-                                        log.debug("[{}] Honest broker '{}' session label: {} (accession '{}' -> '{}')",
-                                                route.getAeTitle(), routeDest.getHonestBrokerName(), sessionLabel, originalAccession, deidentifiedAccession);
-                                    } else {
-                                        // Fail if accession lookup fails - don't send without proper de-identification
-                                        log.error("[{}] Honest broker '{}' failed to lookup accession '{}' - cannot send without de-identification",
-                                                route.getAeTitle(), routeDest.getHonestBrokerName(), originalAccession);
-                                        throw new RuntimeException("Honest broker accession lookup failed for: " + originalAccession);
-                                    }
+                                    // Generate session label based on broker configuration
+                                    sessionLabel = generateHonestBrokerSessionLabel(
+                                            study, route, brokerName, brokerConfig,
+                                            honestBrokerService, deidentifiedPatientId);
                                 } else {
                                     // Fail if patient ID lookup fails - don't send without proper de-identification
                                     log.error("[{}] Honest broker '{}' failed to lookup patient ID '{}' - cannot send without de-identification",
-                                            route.getAeTitle(), routeDest.getHonestBrokerName(), originalPatientId);
+                                            route.getAeTitle(), brokerName, originalPatientId);
                                     throw new RuntimeException("Honest broker patient ID lookup failed for: " + originalPatientId);
                                 }
                             } else {
@@ -753,16 +739,25 @@ public class DicomRouter implements Callable<Integer> {
                             };
                         }
 
-                        // Use StreamingAnonymizer to write directly to ZIP (no temp directories!)
+                        // Determine archive directory for dual-write (write anon files while creating ZIP)
+                        Path archiveAnonDir = null;
+                        if (route != null && route.isEnableArchive() && archiveManager != null) {
+                            try {
+                                Path archiveStudyDir = archiveManager.getArchiveStudyDir(route.getAeTitle(), study.getStudyUid());
+                                archiveAnonDir = archiveStudyDir.resolve("anonymized");
+                                java.nio.file.Files.createDirectories(archiveAnonDir);
+                            } catch (Exception e) {
+                                log.warn("[{}] Failed to create archive directory, anonymized files won't be archived: {}",
+                                        route.getAeTitle(), e.getMessage());
+                                archiveAnonDir = null;
+                            }
+                        }
+
+                        // Use StreamingAnonymizer to write directly to ZIP (and archive directory if enabled)
                         StreamingAnonymizer streamingAnonymizer = new StreamingAnonymizer();
                         StreamingAnonymizer.StreamingResult result;
-                        if (uidCallback != null) {
-                            result = streamingAnonymizer.anonymizeToZip(
-                                    study.getFiles(), tempZip, enhancedScript, Collections.emptyMap(), uidCallback);
-                        } else {
-                            result = streamingAnonymizer.anonymizeToZip(
-                                    study.getFiles(), tempZip, enhancedScript, Collections.emptyMap());
-                        }
+                        result = streamingAnonymizer.anonymizeToZip(
+                                study.getFiles(), tempZip, enhancedScript, Collections.emptyMap(), uidCallback, archiveAnonDir);
 
                         if (result.isSuccess() && result.getSuccessFiles() > 0) {
                             wasAnonymized = true;
@@ -770,31 +765,47 @@ public class DicomRouter implements Callable<Integer> {
                             log.info("Streaming anonymized {} files using script '{}' (dateShift={}, hashUids={})",
                                     result.getSuccessFiles(), anonScriptName, dateShiftDays != 0, hashUidsEnabled);
 
-                            // Note: Archive is handled separately - we don't have anonymized files on disk
-                            // to archive in streaming mode. The archive should use the original files
-                            // and the audit report should be generated differently.
-                            if (route != null && route.isEnableArchive() && archiveManager != null) {
-                                log.debug("[{}] Skipping anonymized archive in streaming mode for study {}",
-                                        route.getAeTitle(), study.getStudyUid());
+                            // Set anonymizedDir if archiving was done via dual-write
+                            if (archiveAnonDir != null) {
+                                anonymizedDir = archiveAnonDir;
+                                log.info("[{}] Archived {} anonymized files for study {} (dual-write)",
+                                        route.getAeTitle(), result.getSuccessFiles(), study.getStudyUid());
+
+                                // Update archive metadata with broker info for crosswalk-based matching in Review UI
+                                if (archiveManager != null && brokerName != null) {
+                                    try {
+                                        archiveManager.updateBrokerInfo(route.getAeTitle(), study.getStudyUid(),
+                                                brokerName, hashUidsEnabled);
+                                    } catch (Exception e) {
+                                        log.warn("[{}] Failed to update broker info in archive metadata: {}",
+                                                route.getAeTitle(), e.getMessage());
+                                    }
+                                }
                             }
 
                             // Return early - ZIP is already created with anonymized content
-                            return new ZipCreationResult(tempZip.toFile(), wasAnonymized, scriptUsed, null);
+                            return new ZipCreationResult(tempZip.toFile(), wasAnonymized, scriptUsed, anonymizedDir);
                         } else if (result.getErrorFiles() > 0) {
-                            log.warn("Streaming anonymization had {} errors, falling back to original files",
-                                    result.getErrorFiles());
-                            // Delete the partial ZIP and fall through to non-anonymized path
+                            // SECURITY: NEVER fall back to original files - this could leak PHI
+                            log.error("Streaming anonymization had {} errors out of {} files - FAILING transfer to protect PHI",
+                                    result.getErrorFiles(), result.getTotalFiles());
                             Files.deleteIfExists(tempZip);
-                            tempZip = Files.createTempFile("dicom_upload_", ".zip");
+                            throw new IOException("Anonymization failed for " + result.getErrorFiles() +
+                                    " files - refusing to send non-anonymized data");
                         }
+                    } catch (IOException e) {
+                        // Re-throw IOExceptions (including our anonymization failure)
+                        throw e;
                     } catch (Exception e) {
-                        log.error("Streaming anonymization failed, using original files: {}", e.getMessage(), e);
-                        // Delete any partial ZIP and fall through
+                        // SECURITY: NEVER fall back to original files - this could leak PHI
+                        log.error("Streaming anonymization failed - FAILING transfer to protect PHI: {}", e.getMessage(), e);
                         Files.deleteIfExists(tempZip);
-                        tempZip = Files.createTempFile("dicom_upload_", ".zip");
+                        throw new IOException("Anonymization failed - refusing to send non-anonymized data: " + e.getMessage(), e);
                     }
                 } else {
-                    log.warn("Script '{}' not found in library, using original files", anonScriptName);
+                    // SECURITY: Script not found - fail the transfer rather than sending un-anonymized data
+                    log.error("Anonymization script '{}' not found in library - FAILING transfer to protect PHI", anonScriptName);
+                    throw new IOException("Anonymization script '" + anonScriptName + "' not found - refusing to send non-anonymized data");
                 }
             }
 
@@ -871,6 +882,23 @@ public class DicomRouter implements Callable<Integer> {
             }
         }
 
+        private String extractStudyDate(DicomReceiver.ReceivedStudy study) {
+            if (study.getFiles().isEmpty()) {
+                return LocalDate.now().toString().replace("-", "");
+            }
+            try {
+                File firstFile = study.getFiles().get(0);
+                org.dcm4che3.io.DicomInputStream dis = new org.dcm4che3.io.DicomInputStream(firstFile);
+                Attributes attrs = dis.readDataset();
+                dis.close();
+                String date = attrs.getString(Tag.StudyDate);
+                return (date != null && !date.isEmpty()) ? date : LocalDate.now().toString().replace("-", "");
+            } catch (Exception e) {
+                log.debug("Could not extract study date from DICOM: {}", e.getMessage());
+                return LocalDate.now().toString().replace("-", "");
+            }
+        }
+
         private String generateSubjectId(DicomReceiver.ReceivedStudy study, String prefix) {
             if (prefix == null) prefix = "SUBJ";
 
@@ -903,6 +931,134 @@ public class DicomRouter implements Callable<Integer> {
             String uidSuffix = study.getStudyUid().substring(Math.max(0, study.getStudyUid().length() - 8));
 
             return prefix + datePart + "_" + uidSuffix;
+        }
+
+        /**
+         * Generate session label for honest broker de-identification.
+         *
+         * <p>This method uses the broker configuration to determine how to generate
+         * the session label. If AccessionNumber is required and missing, the transfer
+         * will fail. If AccessionNumber is not required, a fallback tag (e.g., StudyInstanceUID)
+         * will be used instead.</p>
+         *
+         * @param study The received study
+         * @param route The route configuration
+         * @param brokerName The honest broker name
+         * @param brokerConfig The honest broker configuration
+         * @param honestBrokerService The honest broker service
+         * @param deidentifiedPatientId The already de-identified patient ID
+         * @return The session label
+         * @throws RuntimeException if required tags are missing
+         */
+        private String generateHonestBrokerSessionLabel(
+                DicomReceiver.ReceivedStudy study,
+                AppConfig.RouteConfig route,
+                String brokerName,
+                AppConfig.HonestBrokerConfig brokerConfig,
+                io.xnatworks.router.broker.HonestBrokerService honestBrokerService,
+                String deidentifiedPatientId) {
+
+            String originalAccession = extractAccessionNumber(study);
+            boolean hasAccession = originalAccession != null &&
+                    !originalAccession.isEmpty() &&
+                    !"UNKNOWN".equals(originalAccession);
+
+            // Check if AccessionNumber is required
+            boolean requireAccession = brokerConfig == null || brokerConfig.isRequireAccessionNumber();
+
+            if (hasAccession) {
+                // AccessionNumber is present - use it for session label
+                String deidentifiedAccession = honestBrokerService.lookup(brokerName, originalAccession);
+                if (deidentifiedAccession != null) {
+                    String sessionLabel = deidentifiedPatientId + "-" + deidentifiedAccession;
+                    log.debug("[{}] Honest broker '{}' session label: {} (accession '{}' -> '{}')",
+                            route.getAeTitle(), brokerName, sessionLabel, originalAccession, deidentifiedAccession);
+                    return sessionLabel;
+                } else {
+                    // Fail if accession lookup fails - don't send without proper de-identification
+                    log.error("[{}] Honest broker '{}' failed to lookup accession '{}' - cannot send without de-identification",
+                            route.getAeTitle(), brokerName, originalAccession);
+                    throw new RuntimeException("Honest broker accession lookup failed for: " + originalAccession);
+                }
+            } else if (requireAccession) {
+                // AccessionNumber is required but missing - fail the transfer
+                log.error("[{}] Honest broker '{}' cannot process - AccessionNumber is missing from DICOM data",
+                        route.getAeTitle(), brokerName);
+                throw new RuntimeException("AccessionNumber is required for honest broker de-identification but was not found in DICOM");
+            } else {
+                // AccessionNumber not required and not present - use fallback
+                String fallbackTag = brokerConfig != null ? brokerConfig.getSessionLabelFallbackTag() : "StudyInstanceUID";
+                String fallbackValue = getFallbackTagValue(study, fallbackTag);
+
+                // Generate a hash-based session label from the fallback value
+                String fallbackHash = generateShortHash(fallbackValue);
+                String sessionLabel = deidentifiedPatientId + "-" + fallbackHash;
+
+                log.info("[{}] Honest broker '{}' using fallback tag '{}' for session label: {} (original value: '{}')",
+                        route.getAeTitle(), brokerName, fallbackTag, sessionLabel,
+                        fallbackValue.length() > 20 ? fallbackValue.substring(0, 20) + "..." : fallbackValue);
+                return sessionLabel;
+            }
+        }
+
+        /**
+         * Get the value of a DICOM tag for use as a fallback in session labeling.
+         */
+        private String getFallbackTagValue(DicomReceiver.ReceivedStudy study, String tagName) {
+            // Handle common fallback tags
+            switch (tagName) {
+                case "StudyInstanceUID":
+                    return study.getStudyUid();
+                case "StudyDate":
+                    return extractStudyDate(study);
+                default:
+                    // Try to extract from DICOM attributes
+                    org.dcm4che3.data.Attributes attrs = readFirstDicomAttributes(study);
+                    if (attrs != null) {
+                        int tag = getTagFromKeyword(tagName);
+                        if (tag != 0) {
+                            String value = attrs.getString(tag);
+                            if (value != null && !value.isEmpty()) {
+                                return value;
+                            }
+                        }
+                    }
+                    // Fall back to study UID if tag not found
+                    return study.getStudyUid();
+            }
+        }
+
+        /**
+         * Convert a DICOM keyword to its tag value.
+         */
+        private int getTagFromKeyword(String keyword) {
+            try {
+                java.lang.reflect.Field field = org.dcm4che3.data.Tag.class.getField(keyword);
+                return field.getInt(null);
+            } catch (Exception e) {
+                log.warn("Unknown DICOM tag keyword: {}", keyword);
+                return 0;
+            }
+        }
+
+        /**
+         * Generate a short hash from a string value.
+         * Used for creating unique but short session label suffixes.
+         */
+        private String generateShortHash(String input) {
+            try {
+                java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+                byte[] hash = md.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                // Take first 6 bytes (12 hex chars) for a reasonably unique short hash
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < 6 && i < hash.length; i++) {
+                    sb.append(String.format("%02X", hash[i]));
+                }
+                return sb.toString();
+            } catch (java.security.NoSuchAlgorithmException e) {
+                // Fallback to simple hash if SHA-256 not available
+                return String.format("%08X", input.hashCode()).substring(0, 8);
+            }
         }
 
         private String generateFileSubDir(DicomReceiver.ReceivedStudy study, AppConfig.FileDestination fileDest) {

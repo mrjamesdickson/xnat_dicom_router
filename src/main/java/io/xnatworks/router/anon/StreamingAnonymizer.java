@@ -161,6 +161,14 @@ public class StreamingAnonymizer {
                             inputFile.getName(), inputFile.length() / (1024.0 * 1024.0));
                 }
             }
+
+            // Ensure ZIP is properly finalized before close
+            zos.finish();
+            zos.flush();
+            bos.flush();
+            fos.flush();
+            // Force sync to disk before closing
+            fos.getChannel().force(true);
         }
 
         long durationMs = System.currentTimeMillis() - startTime;
@@ -191,10 +199,36 @@ public class StreamingAnonymizer {
     public StreamingResult anonymizeToZip(List<File> inputFiles, Path zipFile, String script,
                                           Map<String, String> variables,
                                           UidMappingCallback uidCallback) throws IOException {
+        return anonymizeToZip(inputFiles, zipFile, script, variables, uidCallback, null);
+    }
+
+    /**
+     * Anonymize files and write directly to a ZIP file, with UID mapping callback and optional archive copy.
+     * The callback is called for each unique UID encountered, allowing storage in crosswalk.
+     * If archiveDir is provided, copies of anonymized files are also written there for comparison/audit.
+     *
+     * @param inputFiles List of DICOM files to anonymize
+     * @param zipFile Output ZIP file path
+     * @param script DicomEdit script content
+     * @param variables Script variables
+     * @param uidCallback Callback for UID mappings (may be null)
+     * @param archiveDir Optional directory to write copies of anonymized files for archiving (may be null)
+     * @return Result containing counts of processed files
+     */
+    public StreamingResult anonymizeToZip(List<File> inputFiles, Path zipFile, String script,
+                                          Map<String, String> variables,
+                                          UidMappingCallback uidCallback,
+                                          Path archiveDir) throws IOException {
         long startTime = System.currentTimeMillis();
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger errorCount = new AtomicInteger(0);
         AtomicInteger totalBytes = new AtomicInteger(0);
+
+        // Create archive directory if provided
+        if (archiveDir != null) {
+            Files.createDirectories(archiveDir);
+            log.debug("Will also write anonymized files to archive: {}", archiveDir);
+        }
 
         // Track already-reported UIDs to avoid duplicates
         Map<String, String> reportedStudyUids = new HashMap<>();
@@ -229,10 +263,10 @@ public class StreamingAnonymizer {
 
                     if (fileSize > LARGE_FILE_THRESHOLD) {
                         anonymizeLargeFileToZipWithCallback(inputFile, zos, applicator,
-                                uidCallback, reportedStudyUids, reportedSeriesUids, reportedSopUids);
+                                uidCallback, reportedStudyUids, reportedSeriesUids, reportedSopUids, archiveDir);
                     } else {
                         anonymizeNormalFileToZipWithCallback(inputFile, zos, applicator,
-                                uidCallback, reportedStudyUids, reportedSeriesUids, reportedSopUids);
+                                uidCallback, reportedStudyUids, reportedSeriesUids, reportedSopUids, archiveDir);
                     }
 
                     successCount.incrementAndGet();
@@ -248,6 +282,14 @@ public class StreamingAnonymizer {
                             inputFile.getName(), inputFile.length() / (1024.0 * 1024.0));
                 }
             }
+
+            // Ensure ZIP is properly finalized before close
+            zos.finish();
+            zos.flush();
+            bos.flush();
+            fos.flush();
+            // Force sync to disk before closing
+            fos.getChannel().force(true);
         }
 
         long durationMs = System.currentTimeMillis() - startTime;
@@ -270,18 +312,19 @@ public class StreamingAnonymizer {
      */
     private void anonymizeNormalFileToZip(File inputFile, ZipOutputStream zos,
                                           ScriptApplicatorI applicator) throws Exception {
-        anonymizeNormalFileToZipWithCallback(inputFile, zos, applicator, null, null, null, null);
+        anonymizeNormalFileToZipWithCallback(inputFile, zos, applicator, null, null, null, null, null);
     }
 
     /**
-     * Anonymize a normal-sized file and write to ZIP, with UID callback.
+     * Anonymize a normal-sized file and write to ZIP, with UID callback and optional archive copy.
      */
     private void anonymizeNormalFileToZipWithCallback(File inputFile, ZipOutputStream zos,
                                                       ScriptApplicatorI applicator,
                                                       UidMappingCallback uidCallback,
                                                       Map<String, String> reportedStudyUids,
                                                       Map<String, String> reportedSeriesUids,
-                                                      Map<String, String> reportedSopUids) throws Exception {
+                                                      Map<String, String> reportedSopUids,
+                                                      Path archiveDir) throws Exception {
         // Read DICOM object
         DicomObject dcmObj;
         try (DicomInputStream dis = new DicomInputStream(inputFile)) {
@@ -342,6 +385,15 @@ public class StreamingAnonymizer {
         dos.writeDicomFile(dcmObj);
 
         zos.closeEntry();
+
+        // Also write to archive directory if provided
+        if (archiveDir != null) {
+            Path archiveFile = archiveDir.resolve(inputFile.getName());
+            try (FileOutputStream archiveFos = new FileOutputStream(archiveFile.toFile())) {
+                DicomOutputStream archiveDos = new DicomOutputStream(archiveFos);
+                archiveDos.writeDicomFile(dcmObj);
+            }
+        }
     }
 
     /**
@@ -350,18 +402,19 @@ public class StreamingAnonymizer {
      */
     private void anonymizeLargeFileToZip(File inputFile, ZipOutputStream zos,
                                          ScriptApplicatorI applicator) throws Exception {
-        anonymizeLargeFileToZipWithCallback(inputFile, zos, applicator, null, null, null, null);
+        anonymizeLargeFileToZipWithCallback(inputFile, zos, applicator, null, null, null, null, null);
     }
 
     /**
-     * Anonymize a large file with UID callback support.
+     * Anonymize a large file with UID callback and optional archive copy support.
      */
     private void anonymizeLargeFileToZipWithCallback(File inputFile, ZipOutputStream zos,
                                                      ScriptApplicatorI applicator,
                                                      UidMappingCallback uidCallback,
                                                      Map<String, String> reportedStudyUids,
                                                      Map<String, String> reportedSeriesUids,
-                                                     Map<String, String> reportedSopUids) throws Exception {
+                                                     Map<String, String> reportedSopUids,
+                                                     Path archiveDir) throws Exception {
         log.info("Using streaming anonymization for large file: {} ({} GB)",
                 inputFile.getName(), String.format("%.2f", inputFile.length() / (1024.0 * 1024.0 * 1024.0)));
 
@@ -488,5 +541,65 @@ public class StreamingAnonymizer {
         }
 
         zos.closeEntry();
+
+        // For large files with archive, we need to write a complete file to archive
+        // Since large files stream the pixel data directly, we have to re-create the file
+        if (archiveDir != null) {
+            Path archiveFile = archiveDir.resolve(inputFile.getName());
+            try (FileOutputStream archiveFos = new FileOutputStream(archiveFile.toFile());
+                 BufferedOutputStream archiveBos = new BufferedOutputStream(archiveFos, COPY_BUFFER_SIZE)) {
+
+                // Write DICOM preamble
+                archiveBos.write(new byte[128]);
+                archiveBos.write(new byte[] {'D', 'I', 'C', 'M'});
+
+                // Write header using DicomOutputStream
+                DicomOutputStream archiveDos = new DicomOutputStream(archiveBos);
+                archiveDos.setAutoFinish(false);
+                archiveDos.writeFileMetaInformation(header);
+
+                // Write Dataset elements
+                Iterator<DicomElement> archiveIter = header.iterator();
+                while (archiveIter.hasNext()) {
+                    DicomElement elem = archiveIter.next();
+                    int tag = elem.tag();
+                    int element = tag & 0x0000FFFF;
+                    int group = (tag >> 16) & 0x0000FFFF;
+                    if (element == 0x0000 || group == 0x0002) {
+                        continue;
+                    }
+                    if (tag == Tag.PixelData) {
+                        continue;
+                    }
+                    if (tag > Tag.PixelData) {
+                        break;
+                    }
+                    archiveDos.writeHeader(tag, elem.vr(), elem.length());
+                    if (elem.length() > 0) {
+                        archiveDos.write(elem.getBytes());
+                    }
+                }
+
+                // Copy pixel data from original file
+                try (FileChannel inChannel = FileChannel.open(inputFile.toPath(), StandardOpenOption.READ)) {
+                    long remaining = inChannel.size() - pixelDataOffset;
+                    if (remaining > 0) {
+                        inChannel.position(pixelDataOffset);
+                        WritableByteChannel outChannel = Channels.newChannel(archiveBos);
+                        ByteBuffer buffer = ByteBuffer.allocateDirect(COPY_BUFFER_SIZE);
+                        long copied = 0;
+                        while (copied < remaining) {
+                            buffer.clear();
+                            int bytesRead = inChannel.read(buffer);
+                            if (bytesRead < 0) break;
+                            buffer.flip();
+                            while (buffer.hasRemaining()) {
+                                copied += outChannel.write(buffer);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

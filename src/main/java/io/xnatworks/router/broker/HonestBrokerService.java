@@ -84,6 +84,16 @@ public class HonestBrokerService {
     }
 
     /**
+     * Get the configuration for a specific broker.
+     *
+     * @param brokerName The name of the broker
+     * @return The broker configuration, or null if not found
+     */
+    public HonestBrokerConfig getBrokerConfig(String brokerName) {
+        return config.getHonestBroker(brokerName);
+    }
+
+    /**
      * Look up the de-identified ID for a given input ID.
      *
      * @param brokerName The name of the broker configuration to use

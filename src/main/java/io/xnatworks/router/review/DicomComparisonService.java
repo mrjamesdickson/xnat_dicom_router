@@ -8,6 +8,7 @@
 package io.xnatworks.router.review;
 
 import io.xnatworks.router.archive.ArchiveManager;
+import io.xnatworks.router.broker.CrosswalkStore;
 import io.xnatworks.router.ocr.DetectedRegion;
 import io.xnatworks.router.ocr.OcrService;
 import io.xnatworks.router.review.model.*;
@@ -78,10 +79,12 @@ public class DicomComparisonService {
 
     private final ArchiveManager archiveManager;
     private final OcrService ocrService;
+    private final CrosswalkStore crosswalkStore;
 
-    public DicomComparisonService(ArchiveManager archiveManager, OcrService ocrService) {
+    public DicomComparisonService(ArchiveManager archiveManager, OcrService ocrService, CrosswalkStore crosswalkStore) {
         this.archiveManager = archiveManager;
         this.ocrService = ocrService;
+        this.crosswalkStore = crosswalkStore;
     }
 
     /**
@@ -172,11 +175,16 @@ public class DicomComparisonService {
             throw new IOException("Archived study not found: " + studyUid);
         }
 
+        // Get metadata for broker info
+        ArchiveManager.ArchiveMetadata metadata = archivedStudy.getMetadata();
+        String brokerName = metadata != null ? metadata.getHonestBrokerName() : null;
+        boolean hashUidsEnabled = metadata != null && metadata.isHashUidsEnabled();
+
         // Group original files by series UID
         Map<String, List<DicomFileInfo>> originalBySeries = groupFilesBySeries(archivedStudy.getOriginalFiles());
         Map<String, List<DicomFileInfo>> anonBySeries = groupFilesBySeries(archivedStudy.getAnonymizedFiles());
 
-        // Create mapping from original SOP UID to anonymized SOP UID
+        // Create mapping from SOP UID (internal in file) to anonymized file path
         Map<String, Path> sopToAnonFile = new HashMap<>();
         if (archivedStudy.getAnonymizedFiles() != null) {
             for (Path file : archivedStudy.getAnonymizedFiles()) {
@@ -218,13 +226,48 @@ public class DicomComparisonService {
                 fc.setOriginalFile(origInfo.path.toString());
                 fc.setInstanceNumber(origInfo.instanceNumber);
 
-                // Find matching anonymized file (by instance number since SOP UID changes)
-                // Look in same series in anon files
-                List<DicomFileInfo> anonSeriesFiles = anonBySeries.getOrDefault(seriesUid, Collections.emptyList());
-                for (DicomFileInfo anonInfo : anonSeriesFiles) {
-                    if (anonInfo.instanceNumber == origInfo.instanceNumber) {
-                        fc.setAnonymizedFile(anonInfo.path.toString());
-                        break;
+                // Find matching anonymized file using multiple strategies
+
+                // Strategy 1: Use crosswalk to look up hashed SOP UID (most accurate for hashUids=true)
+                if (fc.getAnonymizedFile() == null && hashUidsEnabled && brokerName != null && crosswalkStore != null) {
+                    String hashedSopUid = crosswalkStore.lookup(brokerName, origInfo.sopUid, CrosswalkStore.ID_TYPE_SOP_UID);
+                    if (hashedSopUid != null) {
+                        Path anonFile = sopToAnonFile.get(hashedSopUid);
+                        if (anonFile != null) {
+                            fc.setAnonymizedFile(anonFile.toString());
+                            log.debug("Matched via crosswalk: {} -> {}", origInfo.sopUid, hashedSopUid);
+                        }
+                    }
+                }
+
+                // Strategy 2: Match by filename (works when files are named by original SOP UID)
+                if (fc.getAnonymizedFile() == null) {
+                    String origFilename = origInfo.path.getFileName().toString();
+                    Path anonymizedDir = archivedStudy.getAnonymizedPath();
+                    if (anonymizedDir != null) {
+                        Path matchingAnonFile = anonymizedDir.resolve(origFilename);
+                        if (Files.exists(matchingAnonFile)) {
+                            fc.setAnonymizedFile(matchingAnonFile.toString());
+                        }
+                    }
+                }
+
+                // Strategy 3: Match by internal SOP UID (for non-hashed UIDs)
+                if (fc.getAnonymizedFile() == null) {
+                    Path anonFile = sopToAnonFile.get(origInfo.sopUid);
+                    if (anonFile != null) {
+                        fc.setAnonymizedFile(anonFile.toString());
+                    }
+                }
+
+                // Strategy 4: Fallback to instance number matching (least reliable)
+                if (fc.getAnonymizedFile() == null) {
+                    List<DicomFileInfo> anonSeriesFiles = anonBySeries.getOrDefault(seriesUid, Collections.emptyList());
+                    for (DicomFileInfo anonInfo : anonSeriesFiles) {
+                        if (anonInfo.instanceNumber == origInfo.instanceNumber) {
+                            fc.setAnonymizedFile(anonInfo.path.toString());
+                            break;
+                        }
                     }
                 }
 
@@ -438,14 +481,50 @@ public class DicomComparisonService {
         if (value == null) {
             return null;
         }
+
+        // Try to get string representation first - dcm4che handles VR-specific conversions
+        // This works for UI (UIDs), LO, SH, PN, DA, TM, CS, and other text-based VRs
+        String strValue = attrs.getString(tag, null);
+        if (strValue != null && !strValue.isEmpty()) {
+            if (strValue.length() > 200) {
+                return strValue.substring(0, 200) + "...";
+            }
+            return strValue;
+        }
+
+        // For multi-valued attributes, try to get all values
+        String[] values = attrs.getStrings(tag);
+        if (values != null && values.length > 0) {
+            String joined = String.join(" \\ ", values);
+            if (joined.length() > 200) {
+                return joined.substring(0, 200) + "...";
+            }
+            return joined;
+        }
+
+        // Fall back to binary display only for truly non-text data
         if (value instanceof byte[]) {
-            return "[binary: " + ((byte[]) value).length + " bytes]";
+            byte[] bytes = (byte[]) value;
+            // Try to interpret as ASCII/UTF-8 if reasonable size
+            if (bytes.length > 0 && bytes.length <= 1000) {
+                try {
+                    String decoded = new String(bytes, java.nio.charset.StandardCharsets.UTF_8).trim();
+                    // Check if it's printable (not binary garbage)
+                    if (decoded.chars().allMatch(c -> c >= 32 && c < 127 || c == '\n' || c == '\r' || c == '\t')) {
+                        if (decoded.length() > 200) {
+                            return decoded.substring(0, 200) + "...";
+                        }
+                        return decoded;
+                    }
+                } catch (Exception e) {
+                    // Fall through to binary display
+                }
+            }
+            return "[binary: " + bytes.length + " bytes]";
         }
-        String strValue = attrs.getString(tag, "");
-        if (strValue.length() > 200) {
-            return strValue.substring(0, 200) + "...";
-        }
-        return strValue;
+
+        // Handle other types (sequences, etc.)
+        return value.toString();
     }
 
     private String getTagCategory(int tag) {
